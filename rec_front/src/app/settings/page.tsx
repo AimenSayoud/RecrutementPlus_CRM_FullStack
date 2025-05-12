@@ -1,7 +1,7 @@
 // src/app/settings/page.tsx
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
 import { useAuth } from '@/app/context/AuthContext';
 import Card from '@/components/ui/Card';
@@ -9,6 +9,7 @@ import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import TextArea from '@/components/ui/TextArea';
+import { api } from '@/lib/api';
 
 // Form validation utility
 const validateRequired = (value: string): string => {
@@ -37,7 +38,7 @@ const SettingsPage = () => {
   
   // Tab state
   const [activeTab, setActiveTab] = useState('profile');
-  
+
   // Form states
   const [profileForm, setProfileForm] = useState({
     name: currentUser?.name || '',
@@ -46,7 +47,7 @@ const SettingsPage = () => {
     newPassword: '',
     confirmPassword: '',
   });
-  
+
   const [companyForm, setCompanyForm] = useState({
     companyName: 'RecrutementPlus',
     address: '123 Recruitment St, Business District',
@@ -55,7 +56,7 @@ const SettingsPage = () => {
     email: 'contact@recrutementplus.com',
     description: 'Leading recruitment solutions for top companies worldwide.',
   });
-  
+
   const [systemForm, setSystemForm] = useState({
     dateFormat: 'MM/DD/YYYY',
     timeFormat: '12h',
@@ -63,6 +64,47 @@ const SettingsPage = () => {
     language: 'en',
     defaultCurrency: 'USD',
   });
+
+  // Office management for superadmin
+  const [officeForm, setOfficeForm] = useState({
+    selectedUser: '',
+    selectedOffice: '',
+  });
+
+  const [availableOffices, setAvailableOffices] = useState<string[]>(['Montreal', 'Dubai', 'Istanbul']);
+  const [usersList, setUsersList] = useState<{ value: string, label: string }[]>([]);
+  const [isLoadingOffices, setIsLoadingOffices] = useState(false);
+
+  // Fetch available offices for superadmin
+  useEffect(() => {
+    if (isSuperAdmin && activeTab === 'offices') {
+      const fetchData = async () => {
+        try {
+          setIsLoadingOffices(true);
+          // In a real app, uncomment this to get the real data
+          // const offices = await api.superAdmin.getAvailableOffices();
+          // setAvailableOffices(offices);
+
+          // For development, using mock data
+          setAvailableOffices(['Montreal', 'Dubai', 'Istanbul']);
+
+          // Get users
+          const users = await api.users.getAll();
+          const formattedUsers = users.map(user => ({
+            value: user.id,
+            label: `${user.name} (${user.email})`,
+          }));
+          setUsersList(formattedUsers);
+        } catch (error) {
+          console.error('Failed to fetch offices:', error);
+        } finally {
+          setIsLoadingOffices(false);
+        }
+      };
+
+      fetchData();
+    }
+  }, [isSuperAdmin, activeTab]);
   
   // Error states
   const [profileErrors, setProfileErrors] = useState({
@@ -161,6 +203,39 @@ const SettingsPage = () => {
     console.log('System form submitted:', systemForm);
   };
 
+  // Handle office form change
+  const handleOfficeFormChange = (name: string, value: string) => {
+    setOfficeForm(prev => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  // Handle office form submission
+  const handleOfficeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!officeForm.selectedUser || !officeForm.selectedOffice) {
+      alert('Please select both a user and an office');
+      return;
+    }
+
+    try {
+      // In a real app, this would call an API to update the office
+      console.log('Office form submitted:', officeForm);
+      // await api.superAdmin.updateOffice(officeForm.selectedUser, officeForm.selectedOffice);
+      alert('Office updated successfully!');
+
+      // Reset form
+      setOfficeForm({
+        selectedUser: '',
+        selectedOffice: '',
+      });
+    } catch (error) {
+      console.error('Failed to update office:', error);
+      alert('Failed to update office. Please try again.');
+    }
+  };
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -257,7 +332,7 @@ const SettingsPage = () => {
                   className={`w-full text-left px-4 py-2 rounded-md transition-colors ${
                     activeTab === 'security' ? 'bg-blue-100 dark:bg-blue-900' : 'hover:bg-gray-100 dark:hover:bg-gray-700'
                   }`}
-                  style={{ 
+                  style={{
                     backgroundColor: activeTab === 'security' ? `${colors.primary}20` : undefined,
                     color: activeTab === 'security' ? colors.primary : colors.text
                   }}
@@ -267,6 +342,26 @@ const SettingsPage = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
                     Security
+                  </div>
+                </button>
+              )}
+
+              {isSuperAdmin && (
+                <button
+                  onClick={() => setActiveTab('offices')}
+                  className={`w-full text-left px-4 py-2 rounded-md transition-colors ${
+                    activeTab === 'offices' ? 'bg-blue-100 dark:bg-blue-900' : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                  }`}
+                  style={{
+                    backgroundColor: activeTab === 'offices' ? `${colors.primary}20` : undefined,
+                    color: activeTab === 'offices' ? colors.primary : colors.text
+                  }}
+                >
+                  <div className="flex items-center">
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                    Office Management
                   </div>
                 </button>
               )}
@@ -605,7 +700,7 @@ const SettingsPage = () => {
                   <h3 className="text-md font-medium mb-3" style={{ color: colors.text }}>
                     Password Policy
                   </h3>
-                  
+
                   <div className="space-y-3">
                     <div className="flex items-center">
                       <input
@@ -619,7 +714,7 @@ const SettingsPage = () => {
                         Minimum password length: 8 characters
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -632,7 +727,7 @@ const SettingsPage = () => {
                         Require at least one uppercase letter
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -645,7 +740,7 @@ const SettingsPage = () => {
                         Require at least one number
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -658,7 +753,7 @@ const SettingsPage = () => {
                         Require at least one special character
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -673,12 +768,12 @@ const SettingsPage = () => {
                     </div>
                   </div>
                 </div>
-                
+
                 <div>
                   <h3 className="text-md font-medium mb-3" style={{ color: colors.text }}>
                     Login Security
                   </h3>
-                  
+
                   <div className="space-y-3">
                     <div className="flex items-center">
                       <input
@@ -692,7 +787,7 @@ const SettingsPage = () => {
                         Require two-factor authentication for all users
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -705,7 +800,7 @@ const SettingsPage = () => {
                         Session timeout after 30 minutes of inactivity
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -720,12 +815,12 @@ const SettingsPage = () => {
                     </div>
                   </div>
                 </div>
-                
+
                 <div>
                   <h3 className="text-md font-medium mb-3" style={{ color: colors.text }}>
                     Data Security
                   </h3>
-                  
+
                   <div className="space-y-3">
                     <div className="flex items-center">
                       <input
@@ -739,7 +834,7 @@ const SettingsPage = () => {
                         Mask sensitive data in reports and exports
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -752,7 +847,7 @@ const SettingsPage = () => {
                         Enable data encryption for all stored data
                       </label>
                     </div>
-                    
+
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -767,11 +862,81 @@ const SettingsPage = () => {
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="flex justify-end pt-4">
                   <Button variant="primary">
                     Save Security Settings
                   </Button>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Office Management */}
+          {activeTab === 'offices' && isSuperAdmin && (
+            <Card title="Office Management" subtitle="Manage office assignments for users">
+              <div className="space-y-6">
+                <form onSubmit={handleOfficeSubmit}>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block mb-2 font-medium" style={{ color: colors.text }}>
+                        Select User
+                      </label>
+                      <Select
+                        value={officeForm.selectedUser}
+                        onChange={(e) => handleOfficeFormChange('selectedUser', e.target.value)}
+                        options={usersList}
+                        placeholder="Select a user"
+                        fullWidth
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block mb-2 font-medium" style={{ color: colors.text }}>
+                        Assign Office
+                      </label>
+                      <Select
+                        value={officeForm.selectedOffice}
+                        onChange={(e) => handleOfficeFormChange('selectedOffice', e.target.value)}
+                        options={availableOffices.map(office => ({ value: office, label: office }))}
+                        placeholder="Select an office"
+                        fullWidth
+                      />
+                    </div>
+
+                    <div className="flex justify-end pt-4">
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        disabled={isLoadingOffices || !officeForm.selectedUser || !officeForm.selectedOffice}
+                      >
+                        Update Office
+                      </Button>
+                    </div>
+                  </div>
+                </form>
+
+                <div className="pt-4 border-t" style={{ borderColor: colors.border }}>
+                  <h3 className="text-md font-medium mb-4" style={{ color: colors.text }}>
+                    Available Offices
+                  </h3>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {availableOffices.map((office, index) => (
+                      <div
+                        key={index}
+                        className="border rounded-lg p-4"
+                        style={{ borderColor: colors.border, color: colors.text }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="font-medium">{office}</div>
+                          <div className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 text-xs px-2 py-1 rounded-full">
+                            Active
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </Card>

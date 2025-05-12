@@ -82,7 +82,7 @@ pyrightconfig.json
 
 # dotenv
 .env
-.env.*
+.env
 
 # Docker
 *.pid

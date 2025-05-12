@@ -1,14 +1,32 @@
 // src/components/layout/Header.tsx
 'use client';
 
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
 import { useAuth } from '@/app/context/AuthContext';
-import { motion } from 'framer-motion';
+import { useOffice } from '@/app/context/OfficeContext';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const Header = () => {
   const { theme, toggleTheme, colors } = useTheme();
   const { user, logout } = useAuth();
+  const { selectedOffice, availableOffices, setSelectedOffice } = useOffice();
+  const [officeDropdownOpen, setOfficeDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setOfficeDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   const iconVariants = {
     initial: { scale: 0.8, opacity: 0 },
@@ -29,9 +47,96 @@ const Header = () => {
       }}
     >
       <div className="flex items-center">
-        <h2 className="text-lg font-medium" style={{ color: colors.primary }}>
-          {/* Show current page title here if needed */}
-        </h2>
+        {/* Office Selector Dropdown - Only visible for superadmins */}
+        {user?.role === 'super_admin' && (
+          <div className="relative" ref={dropdownRef}>
+            <motion.button
+              onClick={() => setOfficeDropdownOpen(!officeDropdownOpen)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
+              style={{
+                backgroundColor: officeDropdownOpen
+                  ? `${colors.primary}15`
+                  : (theme === 'light' ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.05)'),
+                color: colors.text,
+                border: `1px solid ${colors.border}`,
+              }}
+              whileHover={{ backgroundColor: `${colors.primary}10` }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+              </svg>
+              <span className="font-medium">{selectedOffice}</span>
+              <svg
+                className={`w-4 h-4 transition-transform duration-200 ${officeDropdownOpen ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </motion.button>
+
+            <AnimatePresence>
+              {officeDropdownOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  transition={{ duration: 0.2 }}
+                  className="absolute top-full left-0 mt-1 w-48 rounded-md shadow-lg z-20"
+                  style={{
+                    backgroundColor: colors.card,
+                    border: `1px solid ${colors.border}`,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div className="py-1">
+                    {availableOffices.map((office) => (
+                      <button
+                        key={office}
+                        onClick={() => {
+                          setSelectedOffice(office);
+                          setOfficeDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-4 py-2 flex items-center gap-2 transition-colors"
+                        style={{
+                          backgroundColor: selectedOffice === office
+                            ? `${colors.primary}15`
+                            : colors.card,
+                          color: selectedOffice === office
+                            ? colors.primary
+                            : colors.text,
+                        }}
+                        onMouseOver={(e) => {
+                          if (selectedOffice !== office) {
+                            e.currentTarget.style.backgroundColor = theme === 'light'
+                              ? 'rgba(0,0,0,0.03)'
+                              : 'rgba(255,255,255,0.05)';
+                          }
+                        }}
+                        onMouseOut={(e) => {
+                          if (selectedOffice !== office) {
+                            e.currentTarget.style.backgroundColor = colors.card;
+                          }
+                        }}
+                      >
+                        {selectedOffice === office && (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                        <span className={selectedOffice === office ? 'ml-0' : 'ml-6'}>
+                          {office}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center space-x-6">

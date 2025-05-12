@@ -12,7 +12,7 @@ except ImportError:
     has_ai_tools = False
 
 # Create API endpoints modules
-from app.api.v1 import candidates, companies, jobs, users, skills
+from app.api.v1 import candidates, companies, jobs, users, skills, superadmin
 
 app = FastAPI(
     title="RecrutementPlus API",
@@ -39,6 +39,7 @@ app.include_router(companies.router, prefix="/api/v1/companies", tags=["companie
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(skills.router, prefix="/api/v1/skills", tags=["skills"])
+app.include_router(superadmin.router, prefix="/api/v1/superadmins", tags=["superadmins"])
 
 @app.get("/")
 async def root():

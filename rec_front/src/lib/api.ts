@@ -384,7 +384,7 @@ export const api = {
     getAll: async () => {
       try {
         const offices = await fetcher<Office[]>('/api/v1/offices');
-        
+
         return offices.map(office => ({
           ...office,
           createdAt: office.createdAt instanceof Date ? office.createdAt : new Date(office.createdAt),
@@ -395,11 +395,11 @@ export const api = {
         throw error;
       }
     },
-      
+
     getById: async (id: string) => {
       try {
         const office = await fetcher<Office>(`/api/v1/offices/${id}`);
-        
+
         return {
           ...office,
           createdAt: office.createdAt instanceof Date ? office.createdAt : new Date(office.createdAt),
@@ -410,5 +410,31 @@ export const api = {
         throw error;
       }
     },
+  },
+
+  // SuperAdmin
+  superAdmin: {
+    getAvailableOffices: async () => {
+      try {
+        const response = await fetcher<{offices: string[]}>('/api/v1/superadmins/offices');
+        return response.offices;
+      } catch (error) {
+        console.error('Failed to fetch available offices:', error);
+        throw error;
+      }
+    },
+
+    updateOffice: async (userId: string, office: string) => {
+      try {
+        const response = await fetcher(`/api/v1/superadmins/update-office/${userId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ office }),
+        });
+        return response;
+      } catch (error) {
+        console.error('Failed to update office:', error);
+        throw error;
+      }
+    }
   },
 };

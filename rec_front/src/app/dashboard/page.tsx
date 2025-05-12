@@ -1,9 +1,10 @@
 // src/app/dashboard/page.tsx
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
 import { useAuth } from '@/app/context/AuthContext';
+import { useOffice } from '@/app/context/OfficeContext';
 import Card from '@/components/ui/Card';
 import { motion } from 'framer-motion';
 //import Badge from '@/components/ui/Badge';
@@ -23,6 +24,54 @@ type BadgeVariant = 'primary' | 'secondary' | 'success' | 'danger' | 'warning' |
 const DashboardPage = () => {
   const { colors, theme } = useTheme();
   const { user } = useAuth();
+  const { selectedOffice } = useOffice();
+
+  // Add state to store office-specific data
+  const [dashboardData, setDashboardData] = useState({
+    openPositions: 24,
+    placements: 76,
+    avgTimeToHire: 32,
+    activeRecruitments: 18,
+  });
+
+  // Update data when office changes
+  useEffect(() => {
+    // In a real app, this would fetch data for the selected office
+    // For now, we'll simulate different data for different offices
+
+    let data = { ...dashboardData };
+
+    switch(selectedOffice) {
+      case 'Montreal':
+        data = {
+          openPositions: 24,
+          placements: 76,
+          avgTimeToHire: 32,
+          activeRecruitments: 18
+        };
+        break;
+      case 'Dubai':
+        data = {
+          openPositions: 16,
+          placements: 42,
+          avgTimeToHire: 28,
+          activeRecruitments: 11
+        };
+        break;
+      case 'Istanbul':
+        data = {
+          openPositions: 19,
+          placements: 38,
+          avgTimeToHire: 35,
+          activeRecruitments: 14
+        };
+        break;
+      default:
+        break;
+    }
+
+    setDashboardData(data);
+  }, [selectedOffice]);
   
   // More refined animations
   const containerVariants = {
@@ -63,49 +112,49 @@ const DashboardPage = () => {
     }
   };
 
-  // Stats from the screenshot
+  // Stats with dynamic data from the selected office
   const stats = [
-    { 
-      name: 'Open Positions', 
-      value: '24', 
-      change: '+5%', 
+    {
+      name: 'Open Positions',
+      value: dashboardData.openPositions.toString(),
+      change: selectedOffice === 'Montreal' ? '+5%' : (selectedOffice === 'Dubai' ? '+3%' : '+4%'),
       isPositive: true,
       icon: 'briefcase',
-      bgColor: theme === 'light' 
-        ? 'from-blue-50/80 to-blue-100/90' 
+      bgColor: theme === 'light'
+        ? 'from-blue-50/80 to-blue-100/90'
         : 'from-blue-900/20 to-blue-800/25',
       iconColor: theme === 'light' ? '#3B82F6' : '#60A5FA'
     },
-    { 
-      name: 'Placements', 
-      value: '76', 
-      change: '+18%',
-      isPositive: true, 
+    {
+      name: 'Placements',
+      value: dashboardData.placements.toString(),
+      change: selectedOffice === 'Montreal' ? '+18%' : (selectedOffice === 'Dubai' ? '+12%' : '+9%'),
+      isPositive: true,
       icon: 'users',
-      bgColor: theme === 'light' 
-        ? 'from-emerald-50/80 to-emerald-100/90' 
+      bgColor: theme === 'light'
+        ? 'from-emerald-50/80 to-emerald-100/90'
         : 'from-emerald-900/20 to-emerald-800/25',
       iconColor: theme === 'light' ? '#10B981' : '#34D399'
     },
-    { 
-      name: 'Avg. Time to Hire', 
-      value: '32', 
+    {
+      name: 'Avg. Time to Hire',
+      value: dashboardData.avgTimeToHire.toString(),
       subValue: 'days',
-      specialText: 'Better',
+      specialText: selectedOffice === 'Dubai' ? 'Much Better' : 'Better',
       specialTextNote: 'Industry avg: 36 days',
       icon: 'clock',
-      bgColor: theme === 'light' 
-        ? 'from-amber-50/80 to-amber-100/90' 
+      bgColor: theme === 'light'
+        ? 'from-amber-50/80 to-amber-100/90'
         : 'from-amber-900/20 to-amber-800/25',
       iconColor: theme === 'light' ? '#F59E0B' : '#FBBF24'
     },
-    { 
-      name: 'Active Recruitments', 
-      value: '18', 
+    {
+      name: 'Active Recruitments',
+      value: dashboardData.activeRecruitments.toString(),
       subText: 'From last month',
       icon: 'user-check',
-      bgColor: theme === 'light' 
-        ? 'from-violet-50/80 to-violet-100/90' 
+      bgColor: theme === 'light'
+        ? 'from-violet-50/80 to-violet-100/90'
         : 'from-violet-900/20 to-violet-800/25',
       iconColor: theme === 'light' ? '#8B5CF6' : '#A78BFA'
     },
@@ -229,7 +278,7 @@ const DashboardPage = () => {
           className="text-sm"
           style={{ color: colors.text }}
         >
-          {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} · {user?.role === 'super_admin' ? 'All Offices' : `${user?.officeId || 'Montreal'} Office`}
+          {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} · {selectedOffice} Office
         </motion.p>
       </div>
 
