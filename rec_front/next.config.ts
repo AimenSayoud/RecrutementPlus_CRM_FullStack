@@ -13,7 +13,6 @@ const nextConfig: NextConfig = {
     serverActions: {
       allowedOrigins: ['localhost:3000'],
     },
-    serverExternalPackages: [],
   },
   typescript: {
     // Disable TypeScript checking during build - we'll handle it separately

@@ -4,23 +4,15 @@ import { Candidate, Company, Job, User, Office } from '@/types';
 // Helper function to simulate API delay
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Helper function to simulate API errors occasionally
-const simulateError = (probability = 0.1) => Math.random() < probability;
-
-// Generic API request function with error handling and loading simulation
+// Generic API request function with loading simulation
 async function apiRequest<T>(
   callback: () => Promise<T>,
   errorMessage = 'An error occurred'
 ): Promise<T> {
   try {
-    // Simulate network delay
-    await delay(Math.random() * 800 + 200); // 200-1000ms delay
-    
-    // Occasionally simulate an error
-    if (simulateError()) {
-      throw new Error(errorMessage);
-    }
-    
+    // Simulate a shorter network delay
+    await delay(Math.random() * 300 + 100); // 100-400ms delay
+
     return await callback();
   } catch (error) {
     console.error('API Error:', error);

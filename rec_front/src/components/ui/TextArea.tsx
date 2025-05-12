@@ -7,6 +7,7 @@ interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement
   error?: string;
   helperText?: string;
   fullWidth?: boolean;
+  maxRows?: number; // Custom prop that won't be passed directly to textarea
 }
 
 const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
@@ -19,6 +20,7 @@ const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
       className = '',
       id,
       rows = 4,
+      maxRows,
       ...props
     },
     ref
@@ -52,6 +54,7 @@ const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
             color: colors.text,
             borderColor: error ? '#EF4444' : colors.border,
           }}
+          data-max-rows={maxRows}
           {...props}
         />
         

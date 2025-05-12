@@ -3,8 +3,29 @@ import { Candidate, Company, Job } from '@/types';
 
 // Get the OpenAI API key from environment variables
 // Add your key to .env.local as NEXT_PUBLIC_OPENAI_API_KEY=your-key-here
-const OPENAI_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+// You can also pass the API key through sessionStorage for development
+const getOpenAIKey = () => {
+  if (typeof window !== 'undefined') {
+    // Try to get from sessionStorage first (for development)
+    const sessionKey = window.sessionStorage.getItem('OPENAI_API_KEY');
+    if (sessionKey) return sessionKey;
+  }
+  // Fall back to environment variable
+  return process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+};
+
+const OPENAI_API_KEY = getOpenAIKey();
 const API_URL = 'https://api.openai.com/v1/chat/completions';
+// Don't use mock data by default - always prefer real OpenAI API
+const USE_MOCK_DATA = false;
+
+// Store OpenAI API key in session storage for development
+export const setOpenAIKey = (apiKey: string) => {
+  if (typeof window !== 'undefined') {
+    window.sessionStorage.setItem('OPENAI_API_KEY', apiKey);
+    window.location.reload(); // Reload to apply the key
+  }
+};
 
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
@@ -12,6 +33,27 @@ export interface OpenAIMessage {
 }
 
 export async function generateChatCompletion(messages: OpenAIMessage[]): Promise<string> {
+  // Use mock data if flag is set
+  if (USE_MOCK_DATA) {
+    console.log("Using mock data for OpenAI service");
+
+    // Extract the last user message to generate a mock response
+    const lastUserMessage = messages.findLast(msg => msg.role === 'user')?.content || '';
+
+    // Generate mock responses based on content
+    if (lastUserMessage.toLowerCase().includes('email')) {
+      return "Dear [Name],\n\nI hope this email finds you well. I am reaching out on behalf of Recruitment Plus regarding [purpose].\n\n[Personalized content here based on the recipient's needs and background.]\n\nI would be happy to schedule a call to discuss this further at your convenience.\n\nThank you for your time and consideration.";
+    } else if (lastUserMessage.toLowerCase().includes('interview question')) {
+      return "Here are 5 interview questions:\n\n1. Can you describe a challenging project you worked on and how you approached it?\n\n2. How do you prioritize tasks when working on multiple projects with competing deadlines?\n\n3. Give an example of a time when you had to adapt to a significant change at work\n\n4. What strategies do you use to collaborate effectively with team members who have different working styles?\n\n5. Where do you see yourself professionally in 3-5 years and what steps are you taking to get there?";
+    } else if (lastUserMessage.toLowerCase().includes('job description')) {
+      return "# Position Title\n\n## About the Company\nWe are a dynamic organization committed to excellence in [industry]. Our mission is to [company mission].\n\n## Role Overview\nWe are seeking a talented and motivated professional to join our team as a [Position]. The successful candidate will be responsible for [key responsibilities].\n\n## Key Responsibilities\n- [Responsibility 1]\n- [Responsibility 2]\n- [Responsibility 3]\n\n## Requirements\n- [Requirement 1]\n- [Requirement 2]\n- [Requirement 3]\n\n## Qualifications\n- [Qualification 1]\n- [Qualification 2]\n\n## Benefits\n- Competitive salary\n- Professional development opportunities\n- [Other benefits]";
+    } else if (lastUserMessage.toLowerCase().includes('suggestion')) {
+      return "Here are some suggestions:\n\n1. Consider expanding your network through industry-specific events\n2. Regularly update your skills through relevant certifications\n3. Develop a personalized outreach strategy\n4. Create customized follow-up sequences for different candidate types\n5. Implement a structured feedback collection process";
+    } else {
+      return "I'm here to help with your recruitment needs. I can assist with creating email templates, generating interview questions, writing job descriptions, or providing suggestions for working with candidates and companies.";
+    }
+  }
+
   try {
     const response = await fetch(API_URL, {
       method: 'POST',
@@ -36,7 +78,7 @@ export async function generateChatCompletion(messages: OpenAIMessage[]): Promise
     return data.choices[0].message.content.trim();
   } catch (error) {
     console.error('Error generating chat completion:', error);
-    
+
     // Return a fallback response in case of an error
     return "I'm sorry, I'm having trouble connecting to my AI service at the moment. Please try again later.";
   }
@@ -52,7 +94,7 @@ export async function generateCandidateEmail(
   const messages: OpenAIMessage[] = [
     {
       role: 'system',
-      content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for candidates. Be friendly, professional, and concise.`
+      content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for candidates. Be friendly, professional, and concise. DO NOT include any signature/footer or "Best regards" section at the end - the application will add this automatically.`
     },
     {
       role: 'user',
@@ -75,7 +117,7 @@ export async function generateCompanyEmail(
   const messages: OpenAIMessage[] = [
     {
       role: 'system',
-      content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for companies. Be formal, professional, and concise.`
+      content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for companies. Be formal, professional, and concise. DO NOT include any signature/footer or "Best regards" section at the end - the application will add this automatically.`
     },
     {
       role: 'user',

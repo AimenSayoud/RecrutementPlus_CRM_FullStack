@@ -1,8 +1,15 @@
 // src/lib/api.ts
 import { Candidate, Company, Job, User, Office } from '@/types';
+import { apiFallback } from './api-fallback';
 
-// API base URL
-const API_BASE_URL = 'http://localhost:8000'; // Default FastAPI port, update if needed
+// API base URL from environment variables
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true';
+
+// Helper function to determine if we should use mock data
+const shouldUseMockData = () => {
+  return USE_MOCK_DATA || typeof window === 'undefined';
+}
 
 // Helper function to handle API responses
 const handleResponse = async (response: Response) => {

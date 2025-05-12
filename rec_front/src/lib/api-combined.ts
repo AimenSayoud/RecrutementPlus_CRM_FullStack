@@ -4,8 +4,15 @@ import { apiFallback } from './api-fallback';
 import { Candidate, Company, Job, User, Office } from '@/types';
 
 // Flag to control which API to use - configurable via environment variables
-const USE_BACKEND = process.env.NEXT_PUBLIC_USE_MOCK_DATA !== 'true'; // Set NEXT_PUBLIC_USE_MOCK_DATA=true to always use mock data
+// Always try to use the backend API first, but fall back to mock data if needed
+const USE_BACKEND = true;
 const FALLBACK_ON_ERROR = true; // Set to false to prevent fallback to mock data
+
+// Ensure fallback data is always used when requested, regardless of errors
+export const forceFallbackData = () => {
+  console.log('Forcing use of fallback data instead of backend API');
+  return apiFallback;
+};
 
 const handleAPICall = async <T>(backendCall: () => Promise<T>, fallbackCall: () => Promise<T>): Promise<T> => {
   // Use fallback if not using backend
