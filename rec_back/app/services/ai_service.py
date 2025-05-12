@@ -4,980 +4,1185 @@ import os
 import logging
 from typing import Dict, List, Tuple, Any, Optional, Union
 from pathlib import Path
-import openai
-from openai import OpenAI
+from openai import OpenAI, APIError # Import APIError for specific handling
 from dotenv import load_dotenv
+import datetime # Needed for fallback experience calculation
+
+# --- Configuration & Constants ---
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-class AIService:
-    """Enhanced service for AI-powered recruitment functionalities"""
-    
-    def __init__(self):
-        # Initialize OpenAI API with key from environment variables
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        if self.openai_api_key:
-            self.client = OpenAI(api_key=self.openai_api_key)
-            logger.info("OpenAI client initialized successfully")
-        else:
-            logger.warning("OPENAI_API_KEY not found in environment variables")
-            self.client = None
-        
-        # Load necessary data
-        self._load_data()
-        
-        # Define system prompts for different tasks
-        self.system_prompts = {
-            "cv_analysis": """You are an expert recruitment assistant specialized in analyzing CVs and extracting structured information.
-Focus on accurately identifying skills, education history, work experience, and creating a professional summary.
+# File Paths
+DATA_DIR = Path("fake_data")
+JOBS_FILE = DATA_DIR / "jobs.json"
+EMAIL_TEMPLATES_FILE = DATA_DIR / "email_templates.json"
+CANDIDATES_FILE = DATA_DIR / "candidate_profiles.json"
+USERS_FILE = DATA_DIR / "users.json"
+EMPLOYERS_FILE = DATA_DIR / "employer_profiles.json"
+SKILLS_FILE = DATA_DIR / "skills.json"
+
+# OpenAI Configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DEFAULT_MODEL = "gpt-4o-mini" # Use a consistent model name
+
+# --- Prompt Templates ---
+
+SYSTEM_PROMPTS = {
+    "cv_analysis": """You are an expert recruitment assistant specialized in analyzing CVs/resumes and extracting structured information.
+Focus on accurately identifying skills, education history, work experience, calculating total experience, and creating a professional summary.
 Always format your response as a well-structured JSON object.""",
-            
-            "job_matching": """You are an expert AI recruitment matching system.
-Your task is to evaluate how well a candidate's profile matches job requirements.
-Consider skills alignment, experience relevance, and overall suitability.
-Provide a match score and explain your reasoning in detail.
-Format your response as a JSON object.""",
-            
-            "email_generation": """You are an expert recruitment consultant who writes clear, professional, and personalized emails.
-Create emails that are warm yet professional, concise yet informative, and tailored to the recipient.
-Maintain appropriate formality and ensure all details are accurate."""
-        }
-    
-    def _load_data(self):
-        """Load necessary data files for AI operations"""
+    "job_matching": """You are an expert AI recruitment matching system.
+Your task is to evaluate how well a candidate's profile matches job requirements based on skills, experience, and education.
+Provide a match score (0-100), identify matching and missing skills, explain your reasoning concisely, and suggest an improvement area.
+Format your response as a JSON array of match objects, sorted by score descending.""",
+    "email_generation": """You are an expert recruitment consultant who writes clear, professional, and personalized emails.
+Create emails that are warm yet professional, concise (under 250 words), informative, and tailored to the recipient (candidate or company).
+Maintain appropriate formality, ensure accuracy, and include a clear call to action.""",
+    "interview_questions": """You are an expert recruitment interview specialist.
+Generate insightful, job-specific interview questions (7-10) to assess technical skills, cultural fit, and experience.
+Create a mix of behavioral, situational, and technical questions.
+If candidate details are provided, tailor some questions accordingly.
+Each question should include its purpose and evaluation guidance.""",
+    "job_description": """You are an expert recruitment content writer specializing in job descriptions.
+Create compelling, detailed, and well-structured job descriptions (400-600 words) that attract qualified candidates.
+Focus on clear responsibilities, specific requirements (required/preferred), necessary skills, benefits, and company information.
+The tone should be professional but engaging, avoiding discriminatory language or unrealistic expectations."""
+}
+
+USER_PROMPT_TEMPLATES = {
+    "cv_analysis": """
+Please analyze the following CV/resume text and extract the information into a structured JSON format.
+
+CV TEXT:
+{cv_text}
+
+REQUIRED JSON STRUCTURE:
+{{
+  "skills": ["skill1", "skill2", ...], // Comprehensive list of technical and soft skills
+  "education": [
+    {{
+      "degree": "...",
+      "institution": "...",
+      "field": "...", // Field of study if available
+      "start_year": "...", // Optional
+      "end_year": "..." // Optional
+    }},
+    ...
+  ],
+  "experience": [
+    {{
+      "title": "...",
+      "company": "...",
+      "duration": "...", // e.g., "Jan 2020 - Present" or "3 years"
+      "start_date": "...", // Optional (YYYY-MM)
+      "end_date": "...", // Optional (YYYY-MM or "Present")
+      "current": true/false, // Indicate if it's the current role
+      "responsibilities": ["...", "...", ...] // Key responsibilities/achievements
+    }},
+    ...
+  ],
+  "total_experience_years": X, // Calculated total years of professional experience
+  "summary": "..." // Professional summary (3-4 sentences) highlighting key qualifications
+}}
+""",
+    "job_matching": """
+Match the following candidate profile against the provided job positions.
+
+CANDIDATE PROFILE:
+{candidate_info_json}
+
+JOB POSITIONS:
+{job_descriptions_json}
+
+For each job position, provide:
+1. A match score (0-100) considering skills, experience, and education.
+2. A list of the candidate's skills that match the job requirements.
+3. A list of important job skills the candidate appears to be missing.
+4. A brief explanation (2-3 sentences) of the match quality.
+5. One specific suggestion for how the candidate could improve their fit for the role.
+
+Return the results as a JSON array, sorted by match score (highest first):
+[
+  {{
+    "job_id": number,
+    "job_title": string,
+    "company_name": string,
+    "match_score": number (0-100),
+    "matching_skills": [list of strings],
+    "non_matching_skills": [list of strings],
+    "match_explanation": string,
+    "improvement_suggestion": string
+  }}
+]
+""",
+    "email_generation": """
+Generate a personalized, professional email based on the provided template and context.
+
+TEMPLATE TYPE: {template_id} ({template_purpose})
+RECIPIENT TYPE: {recipient_type}
+
+ORIGINAL SUBJECT: {base_subject}
+ORIGINAL TEMPLATE CONTENT (Placeholders filled with basic context):
+{base_template}
+
+DETAILED CONTEXT:
+{enhanced_context_json}
+
+Enhance this email to be:
+1. More personalized and specific to the recipient's situation.
+2. Professional yet warm in tone.
+3. Clear, concise (under 250 words), and well-structured.
+4. Include a clear call to action or outline next steps.
+
+Return a JSON object with:
+- "subject": An improved, attention-grabbing subject line.
+- "greeting": A personalized greeting (e.g., "Dear John Doe,").
+- "body": The complete enhanced email body text (excluding greeting and signature).
+- "call_to_action": The specific next step for the recipient (should also be integrated into the body).
+""",
+    "interview_questions": """
+Generate 7-10 high-quality interview questions for the position detailed below{candidate_context_intro}.
+
+JOB DETAILS:
+{job_context_json}
+{candidate_context_section}
+Create questions that:
+1. Assess required technical skills and competencies.
+2. Evaluate cultural fit and soft skills (e.g., communication, teamwork).
+3. Probe relevant experience and achievements using behavioral/situational formats (STAR method).
+{candidate_tailoring_instruction}
+5. Cover a mix of question types (behavioral, situational, technical).
+
+For each question, include the question text, its purpose (what it assesses), and evaluation guidance (what to look for in the answer).
+
+Format the response as a JSON array of question objects:
+[
+  {{
+    "question": "Question text here",
+    "purpose": "What this question aims to assess",
+    "evaluation_guidance": "What to look for in the candidate's answer (e.g., specific examples, clarity, logic)"
+  }}
+]
+""",
+    "job_description": """
+Generate a comprehensive and engaging job description based on the provided details.
+
+POSITION: {position}
+COMPANY: {company_name}
+INDUSTRY: {industry_info}
+REQUIRED SKILLS (Initial list): {skills_list}
+
+Include these sections in the job description:
+1.  **Job Title**: The official title.
+2.  **Company Overview**: Brief, compelling intro to {company_name}{industry_context}.
+3.  **Role Summary**: Concise overview of the position's purpose and impact.
+4.  **Key Responsibilities**: 5-7 specific, action-oriented duties.
+5.  **Required Qualifications**: 4-6 essential qualifications (education, experience).
+6.  **Preferred Qualifications**: 2-4 desirable, nice-to-have qualifications.
+7.  **Required Skills**: List of essential technical and soft skills (expand on the initial list if appropriate).
+8.  **Benefits & Perks**: Highlight key offerings (e.g., health, PTO, development).
+9.  **Location & Work Environment**: Office location, remote options, team culture aspects.
+10. **Application Process**: Clear instructions on how to apply.
+
+Guidelines:
+- Total length: 400-600 words.
+- Use clear, inclusive language, avoiding jargon.
+- Focus on impact and growth opportunities.
+- Ensure requirements are realistic.
+- Mention salary range if standard practice for this role/company.
+
+Format the response as a JSON object containing each section as a key-value pair (strings or lists of strings for bullet points), plus a "full_text" key containing the complete formatted job description:
+{{
+  "title": "...",
+  "company_overview": "...",
+  "role_summary": "...",
+  "key_responsibilities": ["...", ...],
+  "required_qualifications": ["...", ...],
+  "preferred_qualifications": ["...", ...],
+  "required_skills": ["...", ...],
+  "benefits": ["...", ...],
+  "location_environment": "...",
+  "application_process": "...",
+  "full_text": "Complete formatted job description text..."
+}}
+"""
+}
+
+# --- AIService Class ---
+
+class AIService:
+    """
+    Service for AI-powered recruitment functionalities using OpenAI,
+    with fallback to rule-based methods.
+    """
+
+    def __init__(self):
+        """Initialize the AIService, load data, and set up OpenAI client."""
+        self.client = self._initialize_openai_client()
+        self._load_all_data()
+        self.system_prompts = SYSTEM_PROMPTS
+        self.user_prompt_templates = USER_PROMPT_TEMPLATES
+
+    def _initialize_openai_client(self) -> Optional[OpenAI]:
+        """Initializes and returns the OpenAI client if the API key is available."""
+        if OPENAI_API_KEY:
+            try:
+                client = OpenAI(api_key=OPENAI_API_KEY)
+                # Optional: Test connection with a simple call if needed
+                # client.models.list()
+                logger.info("OpenAI client initialized successfully.")
+                return client
+            except APIError as e:
+                logger.error(f"OpenAI API error during initialization: {e}")
+                return None
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
+                return None
+        else:
+            logger.warning(
+                "OPENAI_API_KEY not found in environment variables. "
+                "AI features requiring OpenAI will use fallback methods."
+            )
+            return None
+
+    def _load_all_data(self):
+        """Loads all necessary data files."""
+        self.jobs = self._load_json_data(JOBS_FILE, "jobs")
+        email_templates_list = self._load_json_data(EMAIL_TEMPLATES_FILE, "email templates")
+        self.email_templates = {template["id"]: template for template in email_templates_list} if email_templates_list else {}
+        self.candidates = self._load_json_data(CANDIDATES_FILE, "candidate profiles")
+        self.users = self._load_json_data(USERS_FILE, "users")
+        self.employers = self._load_json_data(EMPLOYERS_FILE, "employer profiles")
+        self.skills = self._load_json_data(SKILLS_FILE, "skills")
+        self.skill_lookup = {skill["id"]: skill["name"] for skill in self.skills} if self.skills else {}
+        self.normalized_skill_lookup = {name.lower(): id for id, name in self.skill_lookup.items()}
+
+        logger.info(f"Loaded {len(self.jobs)} jobs.")
+        logger.info(f"Loaded {len(self.email_templates)} email templates.")
+        logger.info(f"Loaded {len(self.candidates)} candidates.")
+        logger.info(f"Loaded {len(self.users)} users.")
+        logger.info(f"Loaded {len(self.employers)} employers.")
+        logger.info(f"Loaded {len(self.skills)} skills.")
+
+
+    def _load_json_data(self, file_path: Path, data_name: str) -> List[Dict[str, Any]]:
+        """Loads JSON data from a file with error handling."""
+        if not file_path.exists():
+            logger.warning(f"{data_name.capitalize()} file not found at {file_path}. Returning empty list.")
+            return []
         try:
-            # Load jobs data
-            jobs_path = Path("fake_data/jobs.json")
-            with open(jobs_path, "r") as f:
-                self.jobs = json.load(f)
-            logger.info(f"Loaded {len(self.jobs)} jobs from jobs.json")
-            
-            # Load email templates
-            templates_path = Path("fake_data/email_templates.json")
-            with open(templates_path, "r") as f:
-                templates = json.load(f)
-                self.email_templates = {template["id"]: template for template in templates}
-            logger.info(f"Loaded {len(self.email_templates)} email templates")
-            
-            # Load candidate data
-            candidates_path = Path("fake_data/candidate_profiles.json")
-            if candidates_path.exists():
-                with open(candidates_path, "r") as f:
-                    self.candidates = json.load(f)
-                logger.info(f"Loaded {len(self.candidates)} candidate profiles")
-            else:
-                self.candidates = []
-                logger.warning("No candidate profiles found")
-            
-            # Load user data
-            users_path = Path("fake_data/users.json")
-            if users_path.exists():
-                with open(users_path, "r") as f:
-                    self.users = json.load(f)
-                logger.info(f"Loaded {len(self.users)} users")
-            else:
-                self.users = []
-                logger.warning("No users found")
-            
-            # Load employer data
-            employers_path = Path("fake_data/employer_profiles.json")
-            if employers_path.exists():
-                with open(employers_path, "r") as f:
-                    self.employers = json.load(f)
-                logger.info(f"Loaded {len(self.employers)} employer profiles")
-            else:
-                self.employers = []
-                logger.warning("No employer profiles found")
-                
-            # Load skills data
-            skills_path = Path("fake_data/skills.json")
-            if skills_path.exists():
-                with open(skills_path, "r") as f:
-                    self.skills = json.load(f)
-                # Create skill lookup for faster access
-                self.skill_lookup = {skill["id"]: skill["name"] for skill in self.skills}
-                logger.info(f"Loaded {len(self.skills)} skills")
-            else:
-                self.skills = []
-                self.skill_lookup = {}
-                logger.warning("No skills found")
-                
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not isinstance(data, list):
+                     logger.warning(f"Data in {file_path} is not a list. Returning empty list.")
+                     return []
+                logger.debug(f"Successfully loaded {len(data)} items from {file_path}")
+                return data
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {file_path}: {e}")
+            return []
         except Exception as e:
-            logger.error(f"Error loading data: {e}")
-            # Initialize empty data to avoid None references
-            self.jobs = []
-            self.email_templates = {}
-            self.candidates = []
-            self.users = []
-            self.employers = []
-            self.skills = []
-            self.skill_lookup = {}
-    
+            logger.error(f"Error loading {data_name} from {file_path}: {e}")
+            return []
+
+    # --- Prompt Formatting Helper ---
+
+    def _format_user_prompt(self, template_key: str, context: Dict[str, Any]) -> str:
+        """Formats a user prompt using a template key and context dictionary."""
+        template = self.user_prompt_templates.get(template_key)
+        if not template:
+            raise ValueError(f"User prompt template key '{template_key}' not found.")
+        try:
+            # Use format_map for safer formatting (doesn't fail on missing keys)
+            return template.format_map(context)
+        except KeyError as e:
+            logger.error(f"Missing key in context for prompt template '{template_key}': {e}")
+            raise ValueError(f"Missing context key for prompt: {e}") from e
+        except Exception as e:
+            logger.error(f"Error formatting prompt template '{template_key}': {e}")
+            raise
+
+    # --- OpenAI API Call Helper ---
+
+    def _call_openai_api(self,
+                         task_key: str,
+                         user_prompt: str,
+                         model: str = DEFAULT_MODEL,
+                         temperature: float = 0.2,
+                         response_format: Optional[Dict[str, str]] = {"type": "json_object"}) -> Optional[Dict[str, Any]]:
+        """
+        Calls the OpenAI Chat Completion API and handles common errors.
+
+        Args:
+            task_key: Key to retrieve the system prompt (e.g., "cv_analysis").
+            user_prompt: The formatted user prompt.
+            model: The OpenAI model to use.
+            temperature: The creativity level (0.0 to 1.0).
+            response_format: The expected response format (e.g., {"type": "json_object"}).
+
+        Returns:
+            The parsed JSON response as a dictionary, or None if an error occurs.
+        """
+        if not self.client:
+            logger.warning(f"OpenAI client not available. Cannot perform '{task_key}'.")
+            return None
+
+        system_prompt = self.system_prompts.get(task_key)
+        if not system_prompt:
+             logger.error(f"System prompt for task '{task_key}' not found.")
+             return None
+
+        try:
+            logger.info(f"Calling OpenAI API for task: {task_key} with model: {model}")
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                response_format=response_format,
+            )
+
+            response_content = response.choices[0].message.content
+            if not response_content:
+                 logger.warning(f"OpenAI API returned empty content for task '{task_key}'.")
+                 return None
+
+            logger.debug(f"Raw OpenAI response for {task_key}: {response_content[:200]}...") # Log snippet
+
+            # Parse the JSON response
+            result = json.loads(response_content)
+            logger.info(f"Successfully received and parsed response for task: {task_key}")
+            return result
+
+        except APIError as e:
+            logger.error(f"OpenAI API error during '{task_key}': Status={e.status_code}, Message={e.message}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response from OpenAI for '{task_key}': {e}")
+            logger.debug(f"Invalid JSON content received: {response_content}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during OpenAI API call for '{task_key}': {str(e)}")
+            return None
+
+    # --- Core AI Methods ---
+
     def analyze_cv_with_openai(self, cv_text: str) -> Dict[str, Any]:
         """
-        Enhanced CV analysis using OpenAI's API to extract key information
-        
-        Args:
-            cv_text: The CV content as plain text
-            
-        Returns:
-            Dict containing structured CV information including skills, education, experience,
-            total years of experience, and a professional summary
-        """
-        if not self.client:
-            # Fallback to rule-based analysis if API key is not available
-            logger.warning("OpenAI client not available, using rule-based CV analysis")
-            return self.analyze_cv(cv_text)
-        
-        try:
-            # Create a detailed prompt with clear structure expectations
-            prompt = f"""
-            Please analyze the following CV/resume and extract this information in a structured JSON format:
+        Analyzes CV text using OpenAI API for structured information extraction.
+        Falls back to rule-based analysis if API fails or is unavailable.
 
-            1. SKILLS: Extract a comprehensive list of all technical and soft skills mentioned
-            2. EDUCATION: Extract all education entries with degree, institution, field of study, and years (start and end dates if available)
-            3. EXPERIENCE: Extract all work experiences with job title, company, time period, and key responsibilities/achievements
-            4. TOTAL_EXPERIENCE_YEARS: Calculate the total professional experience in years based on work history
-            5. SUMMARY: Create a professional summary (3-4 sentences) highlighting key qualifications and expertise
-
-            Format the response as a JSON object with these keys:
-            {{
-                "skills": ["skill1", "skill2", ...],
-                "education": [
-                    {{
-                        "degree": "...",
-                        "institution": "...", 
-                        "field": "...",
-                        "start_year": "...",
-                        "end_year": "..."
-                    }},
-                    ...
-                ],
-                "experience": [
-                    {{
-                        "title": "...",
-                        "company": "...",
-                        "duration": "...", 
-                        "start_date": "...",
-                        "end_date": "...",
-                        "current": true/false,
-                        "responsibilities": ["...", "...", ...]
-                    }},
-                    ...
-                ],
-                "total_experience_years": X,
-                "summary": "..."
-            }}
-            
-            CV TEXT:
-            {cv_text}
-            """
-            
-            # Call OpenAI API with JSON mode for structured output
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",  # Using the latest compact model for cost efficiency
-                messages=[
-                    {"role": "system", "content": self.system_prompts["cv_analysis"]},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,  # Lower temperature for more consistent output
-                response_format={"type": "json_object"}  # Request JSON format
-            )
-            
-            # Parse the response
-            result = json.loads(response.choices[0].message.content)
-            
-            # Log analysis success
-            logger.info(f"Successfully analyzed CV with OpenAI, extracted {len(result.get('skills', []))} skills")
-            
-            # Ensure all expected keys are present
-            expected_keys = ["skills", "education", "experience", "total_experience_years", "summary"]
-            for key in expected_keys:
-                if key not in result:
-                    if key in ["skills", "education", "experience"]:
-                        result[key] = []
-                    elif key == "total_experience_years":
-                        result[key] = 0
-                    else:
-                        result[key] = ""
-            
-            # Add skill IDs where possible by matching with our skills database
-            result["skill_ids"] = self._map_skills_to_ids(result["skills"])
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error using OpenAI API for CV analysis: {str(e)}")
-            # Fallback to rule-based analysis
-            return self.analyze_cv(cv_text)
-    
-    def _map_skills_to_ids(self, skill_names: List[str]) -> List[int]:
-        """Map skill names to skill IDs from our database"""
-        skill_ids = []
-        
-        # Create a normalized version of our skill lookup for better matching
-        normalized_skills = {name.lower(): id for id, name in self.skill_lookup.items()}
-        
-        for skill in skill_names:
-            skill_lower = skill.lower()
-            # Try direct match
-            if skill_lower in normalized_skills:
-                skill_ids.append(normalized_skills[skill_lower])
-                continue
-                
-            # Try partial match
-            for db_skill, skill_id in normalized_skills.items():
-                if skill_lower in db_skill or db_skill in skill_lower:
-                    skill_ids.append(skill_id)
-                    break
-        
-        return skill_ids
-    
-    def match_jobs_with_openai(self, cv_analysis: Dict[str, Any], job_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        """
-        Enhanced job matching using OpenAI for intelligent semantic matching
-        
         Args:
-            cv_analysis: Dictionary with CV analysis results
-            job_id: Optional specific job ID to match against
-            
+            cv_text: The CV content as plain text.
+
         Returns:
-            List of job matches with match scores and explanations
+            Dictionary containing structured CV information.
         """
-        if not self.client:
-            # Fallback to rule-based matching if API key is not available
-            logger.warning("OpenAI client not available, using rule-based job matching")
-            return self.match_jobs(cv_analysis.get("skills", []))
-        
-        try:
-            # Filter jobs if job_id is provided
-            jobs_to_match = [job for job in self.jobs if job["id"] == job_id] if job_id else self.jobs
-            
-            if not jobs_to_match:
-                logger.warning(f"No jobs found to match against (job_id={job_id})")
-                return []
-            
-            # Limit to 5 jobs for API efficiency if matching against all jobs
-            if len(jobs_to_match) > 5 and job_id is None:
-                # Sort by recency and take most recent 5
-                jobs_to_match = sorted(jobs_to_match, key=lambda j: j.get("posting_date", ""), reverse=True)[:5]
-                logger.info(f"Limited job matching to 5 most recent jobs for API efficiency")
-                
-            # Create job descriptions for matching
-            job_descriptions = []
-            for job in jobs_to_match:
-                # Get company name for context
-                employer = next((e for e in self.employers if e.get("id") == job.get("employer_id")), {})
-                company_name = employer.get("company_name", f"Company {job.get('employer_id')}")
-                
-                # Map skill IDs to names
-                skill_names = [self.skill_lookup.get(skill_id, f"Skill-{skill_id}") for skill_id in job.get("skills", [])]
-                
-                description = {
-                    "job_id": job["id"],
-                    "title": job["title"],
-                    "company": company_name,
-                    "description": job["description"],
-                    "requirements": job.get("requirements", []),
-                    "skills": skill_names,
-                    "location": job.get("location", "Not specified"),
-                    "contract_type": job.get("contract_type", "Not specified"),
-                    "remote_option": job.get("remote_option", False)
-                }
-                job_descriptions.append(description)
-            
-            # Convert candidate info to a structured format
-            candidate_info = {
-                "skills": cv_analysis.get("skills", []),
-                "experience": cv_analysis.get("experience", []),
-                "education": cv_analysis.get("education", []),
-                "total_experience_years": cv_analysis.get("total_experience_years", 0),
-                "summary": cv_analysis.get("summary", "")
+        task_key = "cv_analysis"
+        context = {"cv_text": cv_text}
+        user_prompt = self._format_user_prompt(task_key, context)
+
+        result = self._call_openai_api(task_key, user_prompt, temperature=0.1)
+
+        if result:
+            # Ensure all expected keys are present, provide defaults
+            expected_keys = {
+                "skills": [], "education": [], "experience": [],
+                "total_experience_years": 0, "summary": ""
             }
-            
-            # Create a prompt for OpenAI
-            prompt = f"""
-            I need to match a candidate profile with job positions.
+            for key, default_value in expected_keys.items():
+                if key not in result:
+                    logger.warning(f"Key '{key}' missing in CV analysis response, using default: {default_value}")
+                    result[key] = default_value
 
-            CANDIDATE PROFILE:
-            {json.dumps(candidate_info, indent=2)}
+            # Add skill IDs by matching with the internal skills database
+            result["skill_ids"] = self._map_skills_to_ids(result.get("skills", []))
+            logger.info(f"OpenAI CV analysis successful. Extracted {len(result.get('skills', []))} skills.")
+            return result
+        else:
+            logger.warning("OpenAI CV analysis failed or unavailable. Falling back to rule-based analysis.")
+            return self.analyze_cv_fallback(cv_text) # Use explicit fallback method
 
-            JOB POSITIONS:
-            {json.dumps(job_descriptions, indent=2)}
+    def match_jobs_with_openai(self, cv_analysis: Dict[str, Any], job_id: Optional[int] = None, max_jobs_to_match: int = 5) -> List[Dict[str, Any]]:
+        """
+        Matches a candidate's profile (from CV analysis) against job descriptions using OpenAI.
+        Falls back to rule-based matching if API fails or is unavailable.
 
-            For each job position, please:
-            1. Calculate a match score (0-100) based on skills alignment, experience relevance, and education fit
-            2. Identify which skills from the candidate match with the job requirements
-            3. Provide a brief explanation (2-3 sentences) of the match quality
-            4. Suggest one specific area where the candidate could improve to better match the position
+        Args:
+            cv_analysis: Dictionary with CV analysis results.
+            job_id: Optional specific job ID to match against. If None, matches against recent jobs.
+            max_jobs_to_match: Max number of jobs to send to the API if job_id is None.
 
-            Return the results as a JSON array of objects, one for each job, sorted by match score (highest first):
-            [
-                {
-                    "job_id": number,
-                    "job_title": string,
-                    "company_name": string,
-                    "match_score": number (0-100),
-                    "matching_skills": [list of strings],
-                    "non_matching_skills": [list of important skills the candidate is missing],
-                    "match_explanation": string,
-                    "improvement_suggestion": string
-                }
-            ]
-            """
-            
-            # Call OpenAI API
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": self.system_prompts["job_matching"]},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.2,
-                response_format={"type": "json_object"}
+        Returns:
+            List of job matches with scores and explanations, sorted by score.
+        """
+        task_key = "job_matching"
+
+        # Prepare candidate info
+        candidate_info = {
+            "skills": cv_analysis.get("skills", []),
+            "experience": cv_analysis.get("experience", []),
+            "education": cv_analysis.get("education", []),
+            "total_experience_years": cv_analysis.get("total_experience_years", 0),
+            "summary": cv_analysis.get("summary", "")
+        }
+
+        # Select and prepare job descriptions
+        jobs_to_match = self._select_jobs_for_matching(job_id, max_jobs_to_match)
+        if not jobs_to_match:
+            return []
+        job_descriptions = [self._prepare_job_description_for_matching(job) for job in jobs_to_match]
+
+        # Format prompt and call API
+        context = {
+            "candidate_info_json": json.dumps(candidate_info, indent=2),
+            "job_descriptions_json": json.dumps(job_descriptions, indent=2)
+        }
+        user_prompt = self._format_user_prompt(task_key, context)
+        result = self._call_openai_api(task_key, user_prompt, temperature=0.2)
+
+        if result:
+            # The prompt asks for a direct list in the response
+            matches = result if isinstance(result, list) else result.get("matches", []) # Handle potential wrapping
+            if not isinstance(matches, list):
+                 logger.warning(f"Unexpected response format for job matching. Expected list, got {type(matches)}. Content: {str(matches)[:200]}...")
+                 matches = []
+
+            # Validate and sort matches
+            valid_matches = [m for m in matches if isinstance(m, dict) and "job_id" in m and "match_score" in m]
+            valid_matches.sort(key=lambda x: x.get("match_score", 0), reverse=True)
+            logger.info(f"OpenAI job matching successful. Found {len(valid_matches)} potential matches.")
+            return valid_matches
+        else:
+            logger.warning("OpenAI job matching failed or unavailable. Falling back to rule-based matching.")
+            # Pass necessary info to fallback
+            return self.match_jobs_fallback(
+                skills=candidate_info["skills"],
+                experience_years=candidate_info["total_experience_years"]
             )
-            
-            # Parse the response
-            result = json.loads(response.choices[0].message.content)
-            
-            # Ensure we have a list of matches
-            matches = result.get("matches", [])
-            if not isinstance(matches, list) and "matches" in result:
-                matches = result["matches"]
-            elif not isinstance(matches, list) and isinstance(result, list):
-                matches = result
-            elif not isinstance(matches, list):
-                matches = []
-                
-            # Sort by match score
-            matches.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-            
-            # Log match results
-            logger.info(f"Successfully matched candidate against {len(matches)} jobs")
-            
-            return matches
-            
-        except Exception as e:
-            logger.error(f"Error using OpenAI API for job matching: {str(e)}")
-            # Fallback to rule-based matching
-            return self.match_jobs(cv_analysis.get("skills", []))
-    
+
     def generate_email_with_openai(self, template_id: str, context: Dict[str, Any]) -> Dict[str, str]:
         """
-        Generate a personalized email using OpenAI with enhanced context awareness
-        
+        Generates a personalized email using OpenAI based on a template and context.
+        Falls back to simple template filling if API fails or is unavailable.
+
         Args:
-            template_id: The ID of the email template to use
-            context: Dictionary with context for email personalization
-            
+            template_id: The ID of the email template.
+            context: Dictionary with context for personalization (e.g., candidate_name, job_title).
+
         Returns:
-            Dictionary with subject and body of the generated email
+            Dictionary with "subject" and "body" of the generated email.
         """
-        if not self.client:
-            # Fallback to template-based email if API key is not available
-            logger.warning("OpenAI client not available, using template-based email generation")
-            return self.generate_email(template_id, context)
-        
-        try:
-            # Get the base template
-            if template_id not in self.email_templates:
-                error_msg = f"Template with ID {template_id} not found"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            template = self.email_templates[template_id]
-            base_subject = template["subject"]
-            base_template = template["template"]
-            
-            # Do basic placeholder replacement to give OpenAI context
-            for key, value in context.items():
-                placeholder = "{{" + key + "}}"
-                base_subject = base_subject.replace(placeholder, str(value))
-                if isinstance(value, list) and key == "matching_skills":
-                    formatted_skills = ", ".join(value)
-                    base_template = base_template.replace(placeholder, formatted_skills)
-                else:
-                    base_template = base_template.replace(placeholder, str(value))
-            
-            # Get recipient type and enhance context
-            recipient_type = "candidate" if "candidate_name" in context else "company"
-            enhanced_context = {}
-            
-            if recipient_type == "candidate":
-                enhanced_context = {
-                    "candidate_name": context.get("candidate_name", "Candidate"),
-                    "job_title": context.get("job_title", "the position"),
-                    "company_name": context.get("company_name", "our client"),
-                    "skills": context.get("skills", []),
-                    "matching_skills": context.get("matching_skills", []),
-                    "candidate_status": "new candidate" if "new" in template_id else "interviewed candidate" if "interview" in template_id else "candidate",
-                    "communication_purpose": template_id.replace("_", " ")
-                }
-            else:
-                enhanced_context = {
-                    "company_name": context.get("company_name", "the company"),
-                    "contact_person": context.get("contact_person", "Hiring Manager"),
-                    "job_title": context.get("job_title", "open position"),
-                    "industry": context.get("industry", "your industry"),
-                    "communication_purpose": template_id.replace("_", " ")
-                }
-            
-            # Create a prompt for OpenAI with detailed enhancement instructions
-            prompt = f"""
-            I need to generate a personalized, professional email for a recruitment process.
-            
-            Template type: {template_id} ({template_id.replace("_", " ")})
-            Recipient type: {recipient_type}
-            
-            Original subject: {base_subject}
-            
-            Original template content: 
-            {base_template}
-            
-            Context information:
-            {json.dumps(enhanced_context, indent=2)}
-            
-            Please enhance this email to make it:
-            1. More personalized to the recipient's specific situation
-            2. Professional but warm in tone
-            3. Clear and concise (no more than 250 words)
-            4. Well-structured with proper paragraphs
-            5. Include a clear call to action or next steps
-            
-            Return a JSON object with:
-            - "subject": An improved subject line that's attention-grabbing
-            - "body": The complete email text (excluding opening/greeting and signature)
-            - "greeting": A personalized greeting line
-            - "call_to_action": A clear next step for the recipient
-            """
-            
-            # Call OpenAI API
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": self.system_prompts["email_generation"]},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.5,  # Higher temperature for more creative output
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse the response
-            result = json.loads(response.choices[0].message.content)
-            
-            # Format email with standard greeting and signature
-            greeting = result.get("greeting", f"Dear {context.get('candidate_name', context.get('contact_person', 'Sir/Madam'))},")
-            call_to_action = result.get("call_to_action", "")
-            
-            # If there's a specific call to action, make sure it's included in the body
-            body = result.get("body", base_template)
-            if call_to_action and call_to_action not in body:
-                body = f"{body}\n\n{call_to_action}"
-                
-            # Add signature line - would be customized in a real system
-            signature = "\n\nBest regards,\n[Recruiter Name]\nRecruitment Consultant\nRecrutementPlus"
-            
-            formatted_email = f"{greeting}\n\n{body}{signature}"
-            
-            return {
-                "subject": result.get("subject", base_subject),
-                "body": formatted_email
-            }
-            
-        except Exception as e:
-            logger.error(f"Error using OpenAI API for email generation: {str(e)}")
-            # Fallback to template-based email
-            return self.generate_email(template_id, context)
-    
-    def generate_interview_questions(self, job_description: Dict[str, Any], candidate_info: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
-        """
-        Generate personalized interview questions based on job description and optional candidate info
-        
-        Args:
-            job_description: Dictionary with job details
-            candidate_info: Optional dictionary with candidate information
-            
-        Returns:
-            List of question objects with question text and purpose
-        """
-        if not self.client:
-            # Return basic interview questions if API key is not available
-            logger.warning("OpenAI client not available, using basic interview questions")
-            return self._generate_basic_interview_questions(job_description.get("title", ""))
-        
-        try:
-            # Create a role-specific system prompt
-            system_prompt = """You are an expert recruitment interview specialist.
-Generate insightful, job-specific interview questions that assess both technical skills and cultural fit.
-Create a mix of behavioral, situational, technical, and experience-based questions.
-Each question should have a clear purpose that helps evaluate the candidate effectively."""
-            
-            # Build context from job description
-            job_context = {
-                "title": job_description.get("title", ""),
-                "company": job_description.get("company_name", "the company"),
-                "description": job_description.get("description", ""),
-                "requirements": job_description.get("requirements", []),
-                "skills": job_description.get("skills", []),
-            }
-            
-            # Add candidate context if available
-            candidate_context = {}
-            if candidate_info:
-                candidate_context = {
-                    "name": candidate_info.get("name", ""),
-                    "skills": candidate_info.get("skills", []),
-                    "experience": candidate_info.get("experience", []),
-                    "experience_years": candidate_info.get("total_experience_years", 0),
-                }
-            
-            # Determine if we need to tailor questions to the candidate
-            has_candidate = bool(candidate_info)
-            
-            # Create a prompt for OpenAI
-            prompt = f"""
-            Generate 7-10 high-quality interview questions for a {job_context['title']} position at {job_context['company']}.
-            
-            JOB DETAILS:
-            {json.dumps(job_context, indent=2)}
-            
-            {"CANDIDATE DETAILS:" if has_candidate else ""}
-            {json.dumps(candidate_context, indent=2) if has_candidate else ""}
-            
-            Please create questions that:
-            1. Assess technical skills and competencies required for the position
-            2. Evaluate cultural fit and soft skills
-            3. Probe for relevant experience and achievements
-            4. {"Are tailored to this specific candidate's background" if has_candidate else "Would be appropriate for candidates with varying experience levels"}
-            5. Include a mix of behavioral, situational, and technical questions
-            
-            For each question, include:
-            - The question text
-            - The purpose (what this question aims to assess)
-            - A note on what to look for in the answer
-            
-            Format your response as a JSON array of question objects:
-            [
-                {{
-                    "question": "Question text here",
-                    "purpose": "What this question aims to assess",
-                    "evaluation_guidance": "What to look for in the candidate's answer"
-                }}
-            ]
-            """
-            
-            # Call OpenAI API
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.5,
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse the response
-            result = json.loads(response.choices[0].message.content)
-            
-            # Extract questions from the response
-            questions = result.get("questions", [])
-            if not isinstance(questions, list) and isinstance(result, list):
-                questions = result
-            elif not isinstance(questions, list):
-                questions = []
-                
-            # Log successful generation
-            logger.info(f"Generated {len(questions)} interview questions for {job_context['title']} position")
-            
-            return questions
-            
-        except Exception as e:
-            logger.error(f"Error generating interview questions: {str(e)}")
-            # Fallback to basic questions
-            return self._generate_basic_interview_questions(job_description.get("title", ""))
-    
-    def _generate_basic_interview_questions(self, position: str) -> List[Dict[str, str]]:
-        """Generate basic interview questions as a fallback"""
-        return [
-            {
-                "question": f"Can you tell me about your experience in {position} roles?",
-                "purpose": "Assessing relevant experience"
-            },
-            {
-                "question": "Describe a challenging project you worked on and how you approached it.",
-                "purpose": "Evaluating problem-solving skills"
-            },
-            {
-                "question": "How do you stay updated with the latest developments in your field?",
-                "purpose": "Assessing continuous learning"
-            },
-            {
-                "question": "What are your strengths and weaknesses as they relate to this role?",
-                "purpose": "Self-awareness and honesty"
-            },
-            {
-                "question": "Describe a situation where you had to work under pressure or tight deadlines.",
-                "purpose": "Stress management and prioritization"
-            }
-        ]
-    
-    def generate_job_description(self, 
-                               position: str, 
-                               company_name: str, 
-                               industry: Optional[str] = None, 
-                               required_skills: Optional[List[str]] = None) -> Dict[str, str]:
-        """
-        Generate a comprehensive job description for a position
-        
-        Args:
-            position: Job title/position
-            company_name: Name of the company
-            industry: Optional industry
-            required_skills: Optional list of required skills
-            
-        Returns:
-            Dictionary with structured job description sections
-        """
-        if not self.client:
-            # Return basic job description if API key is not available
-            logger.warning("OpenAI client not available, using basic job description template")
-            return self._generate_basic_job_description(position, company_name, industry)
-        
-        try:
-            # Create a prompt for OpenAI
-            system_prompt = """You are an expert recruitment content writer specializing in job descriptions.
-Create compelling, detailed, and well-structured job descriptions that attract qualified candidates.
-Focus on clear responsibilities, specific requirements, and compelling company information.
-The tone should be professional but engaging, avoiding discriminatory language or unrealistic expectations."""
-            
-            # Build context
-            skills_text = ", ".join(required_skills) if required_skills else "to be determined based on the position"
-            
-            prompt = f"""
-            Generate a comprehensive and attractive job description for a {position} position at {company_name}{f" in the {industry} industry" if industry else ""}.
-            
-            The job description should include these sections:
-            1. Company Overview: Brief introduction to {company_name}{f" and its position in the {industry} industry" if industry else ""}
-            2. Role Summary: Concise overview of the {position} position
-            3. Key Responsibilities: 5-7 specific duties and responsibilities
-            4. Required Qualifications: 4-6 must-have qualifications including education, experience, and skills
-            5. Preferred Qualifications: 2-4 nice-to-have qualifications
-            6. Required Skills: Technical and soft skills needed ({skills_text})
-            7. Benefits & Perks: What the company offers to employees
-            8. Application Process: How to apply for the position
-            
-            Guidelines:
-            - Keep the total length between 400-600 words
-            - Use clear, concise language without jargon
-            - Avoid discriminatory language or unrealistic requirements
-            - Focus on what the candidate will do, not just what they need to have
-            - Include salary range if appropriate
-            - Highlight growth opportunities and company culture
-            
-            Format the response as a JSON object with these sections:
-            {{
-                "title": "Job title",
-                "company_overview": "Text...",
-                "role_summary": "Text...",
-                "key_responsibilities": ["Item 1", "Item 2", ...],
-                "required_qualifications": ["Item 1", "Item 2", ...],
-                "preferred_qualifications": ["Item 1", "Item 2", ...],
-                "required_skills": ["Skill 1", "Skill 2", ...],
-                "benefits": ["Benefit 1", "Benefit 2", ...],
-                "application_process": "Text...",
-                "full_text": "The complete job description as continuous text with proper formatting"
-            }}
-            """
-            
-            # Call OpenAI API
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.6,
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse the response
-            result = json.loads(response.choices[0].message.content)
-            
-            # Log successful generation
-            logger.info(f"Generated job description for {position} at {company_name}")
-            
-            # Ensure all expected sections are present
-            expected_keys = ["title", "company_overview", "role_summary", "key_responsibilities", 
-                            "required_qualifications", "preferred_qualifications", "required_skills",
-                            "benefits", "application_process", "full_text"]
-            
-            for key in expected_keys:
-                if key not in result:
-                    if key in ["key_responsibilities", "required_qualifications", 
-                              "preferred_qualifications", "required_skills", "benefits"]:
-                        result[key] = []
-                    else:
-                        result[key] = ""
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error generating job description: {str(e)}")
-            # Fallback to basic job description
-            return self._generate_basic_job_description(position, company_name, industry)
-    
-    def _generate_basic_job_description(self, position: str, company_name: str, industry: Optional[str] = None) -> Dict[str, str]:
-        """Generate a basic job description as a fallback"""
-        industry_text = f" in the {industry} industry" if industry else ""
-        overview = f"{company_name} is a leading company{industry_text} looking for talented professionals to join our team."
-        
-        description = {
-            "title": position,
-            "company_overview": overview,
-            "role_summary": f"We are seeking a talented {position} to join our growing team.",
-            "key_responsibilities": [
-                f"Perform {position} duties as assigned",
-                "Collaborate with team members on projects",
-                "Report to management on progress and results",
-                "Maintain high standards of quality in all work"
-            ],
-            "required_qualifications": [
-                f"Previous experience in {position} role",
-                "Relevant education or certification",
-                "Strong communication skills",
-                "Ability to work in a team environment"
-            ],
-            "preferred_qualifications": [
-                "Advanced degree in related field",
-                "Additional certifications"
-            ],
-            "required_skills": [
-                "Communication",
-                "Teamwork",
-                "Time management",
-                "Problem-solving"
-            ],
-            "benefits": [
-                "Competitive salary",
-                "Professional development opportunities",
-                "Health insurance",
-                "Flexible working hours"
-            ],
-            "application_process": "Please submit your resume and cover letter to apply for this position.",
-            "full_text": f"{overview}\n\nRole Summary:\nWe are seeking a talented {position} to join our growing team.\n\n[Basic job description content would continue here]"
+        task_key = "email_generation"
+
+        # Get base template
+        template = self.email_templates.get(template_id)
+        if not template:
+            logger.error(f"Email template with ID '{template_id}' not found.")
+            # Return a default error email or raise? For now, return basic
+            return {"subject": "Error: Template Not Found", "body": f"Could not find email template '{template_id}'."}
+
+        base_subject = template["subject"]
+        base_template_body = template["template"]
+
+        # Basic placeholder filling for context
+        filled_subject = base_subject
+        filled_body = base_template_body
+        for key, value in context.items():
+            placeholder = "{{" + key + "}}"
+            str_value = ", ".join(value) if isinstance(value, list) else str(value)
+            filled_subject = filled_subject.replace(placeholder, str_value)
+            filled_body = filled_body.replace(placeholder, str_value)
+
+        # Prepare enhanced context for OpenAI
+        recipient_type = "candidate" if "candidate_name" in context else "company"
+        enhanced_context = self._prepare_email_context(template_id, recipient_type, context)
+
+        # Format prompt and call API
+        prompt_context = {
+            "template_id": template_id,
+            "template_purpose": template.get("purpose", template_id.replace("_", " ")), # Add purpose if available
+            "recipient_type": recipient_type,
+            "base_subject": base_subject, # Pass original subject too
+            "base_template": filled_body, # Pass the roughly filled template
+            "enhanced_context_json": json.dumps(enhanced_context, indent=2)
         }
-        
-        return description
-    
-    # Legacy methods preserved for fallback functionality
-    
-    def analyze_cv(self, cv_text: str) -> Dict[str, Any]:
+        user_prompt = self._format_user_prompt(task_key, prompt_context)
+        result = self._call_openai_api(task_key, user_prompt, temperature=0.5)
+
+        if result and isinstance(result, dict) and "subject" in result and "body" in result:
+            # Format the final email
+            greeting = result.get("greeting", f"Dear {enhanced_context.get('recipient_name', 'Sir/Madam')},")
+            body = result.get("body", filled_body) # Fallback to basic filled body
+            call_to_action = result.get("call_to_action", "")
+
+            # Ensure CTA is included if provided separately
+            if call_to_action and call_to_action not in body:
+                 body = f"{body}\n\n{call_to_action}"
+
+            # Add a standard signature (customize as needed)
+            signature = "\n\nBest regards,\n[Your Name/Recruiter Name]\n[Your Title]\n[Your Company]"
+            formatted_email_body = f"{greeting}\n\n{body}{signature}"
+
+            logger.info(f"OpenAI email generation successful for template '{template_id}'.")
+            return {
+                "subject": result.get("subject", filled_subject), # Fallback to basic filled subject
+                "body": formatted_email_body
+            }
+        else:
+            logger.warning(f"OpenAI email generation failed or unavailable for template '{template_id}'. Falling back to basic template filling.")
+            # Use the initially filled subject and body for fallback
+            signature = "\n\nBest regards,\n[Your Name/Recruiter Name]\n[Your Title]\n[Your Company]"
+            return {
+                "subject": filled_subject,
+                "body": f"Dear {enhanced_context.get('recipient_name', 'Sir/Madam')},\n\n{filled_body}{signature}"
+            }
+
+    def generate_interview_questions(self, job_details: Dict[str, Any], candidate_info: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
         """
-        Analyze CV content and extract key information using rule-based approach
+        Generates interview questions using OpenAI based on job and optional candidate info.
+        Falls back to basic generic questions if API fails or is unavailable.
+
+        Args:
+            job_details: Dictionary with job information (title, company, description, skills, etc.).
+            candidate_info: Optional dictionary with candidate details (name, skills, experience).
+
+        Returns:
+            List of question objects, each with "question", "purpose", and "evaluation_guidance".
         """
-        # Extract skills
-        skills = self._extract_skills(cv_text)
-        
-        # Extract education
-        education = self._extract_education(cv_text)
-        
-        # Extract experience
-        experience, total_years = self._extract_experience(cv_text)
-        
-        # Generate a summary
-        summary = self._generate_summary(skills, education, experience)
-        
+        task_key = "interview_questions"
+
+        # Prepare context
+        job_context = {
+            "title": job_details.get("title", "N/A"),
+            "company": job_details.get("company_name", "the company"),
+            "description": job_details.get("description", ""),
+            "requirements": job_details.get("requirements", []),
+            "skills": job_details.get("skills", []) # Assumes skills are names here
+        }
+
+        candidate_context_section = ""
+        candidate_context_intro = ""
+        candidate_tailoring_instruction = "4. Ensure questions are suitable for candidates with varying backgrounds."
+        if candidate_info:
+            candidate_context = {
+                "name": candidate_info.get("name", "the candidate"),
+                "skills": candidate_info.get("skills", []),
+                "experience_summary": candidate_info.get("summary", ""), # Use summary
+                "experience_years": candidate_info.get("total_experience_years", 0)
+            }
+            candidate_context_section = f"\nCANDIDATE DETAILS:\n{json.dumps(candidate_context, indent=2)}"
+            candidate_context_intro = " and the specific candidate details provided"
+            candidate_tailoring_instruction = "4. Tailor some questions to probe the specific candidate's background and experience."
+
+
+        # Format prompt and call API
+        prompt_context = {
+            "job_context_json": json.dumps(job_context, indent=2),
+            "candidate_context_section": candidate_context_section,
+            "candidate_context_intro": candidate_context_intro,
+            "candidate_tailoring_instruction": candidate_tailoring_instruction
+        }
+        user_prompt = self._format_user_prompt(task_key, prompt_context)
+        result = self._call_openai_api(task_key, user_prompt, temperature=0.5)
+
+        if result:
+            # Prompt asks for a direct list
+            questions = result if isinstance(result, list) else result.get("questions", [])
+            if not isinstance(questions, list):
+                 logger.warning(f"Unexpected response format for interview questions. Expected list, got {type(questions)}. Content: {str(questions)[:200]}...")
+                 questions = []
+
+            valid_questions = [q for q in questions if isinstance(q, dict) and "question" in q and "purpose" in q]
+            logger.info(f"OpenAI generated {len(valid_questions)} interview questions for {job_context['title']}.")
+            return valid_questions
+        else:
+            logger.warning(f"OpenAI interview question generation failed or unavailable for {job_context['title']}. Falling back to basic questions.")
+            return self._generate_basic_interview_questions(job_context['title'])
+
+    def generate_job_description(self,
+                                 position: str,
+                                 company_name: str,
+                                 industry: Optional[str] = None,
+                                 required_skills: Optional[List[str]] = None) -> Dict[str, Union[str, List[str]]]:
+        """
+        Generates a job description using OpenAI.
+        Falls back to a basic template if API fails or is unavailable.
+
+        Args:
+            position: Job title.
+            company_name: Name of the company.
+            industry: Optional industry context.
+            required_skills: Optional list of initial required skills.
+
+        Returns:
+            Dictionary with structured job description sections and full text.
+        """
+        task_key = "job_description"
+
+        # Prepare context
+        context = {
+            "position": position,
+            "company_name": company_name,
+            "industry_info": industry if industry else "N/A",
+            "industry_context": f" in the {industry} industry" if industry else "",
+            "skills_list": ", ".join(required_skills) if required_skills else "Key skills for the role"
+        }
+
+        # Format prompt and call API
+        user_prompt = self._format_user_prompt(task_key, context)
+        result = self._call_openai_api(task_key, user_prompt, temperature=0.6)
+
+        if result and isinstance(result, dict) and "title" in result and "full_text" in result:
+             # Ensure all expected sections are present
+            expected_keys = {
+                "title": "", "company_overview": "", "role_summary": "",
+                "key_responsibilities": [], "required_qualifications": [],
+                "preferred_qualifications": [], "required_skills": [],
+                "benefits": [], "location_environment": "",
+                "application_process": "", "full_text": ""
+            }
+            for key, default_value in expected_keys.items():
+                if key not in result:
+                    logger.warning(f"Key '{key}' missing in job description response, using default.")
+                    result[key] = default_value
+
+            logger.info(f"OpenAI generated job description for {position} at {company_name}.")
+            return result
+        else:
+            logger.warning(f"OpenAI job description generation failed for {position}. Falling back to basic template.")
+            return self._generate_basic_job_description(position, company_name, industry)
+
+
+    # --- Helper & Fallback Methods ---
+
+    def _map_skills_to_ids(self, skill_names: List[str]) -> List[int]:
+        """Maps extracted skill names to known skill IDs using normalized matching."""
+        skill_ids = set() # Use set to avoid duplicates
+        for skill in skill_names:
+            skill_lower = skill.lower().strip()
+            if not skill_lower:
+                continue
+
+            # Try direct match first
+            if skill_lower in self.normalized_skill_lookup:
+                skill_ids.add(self.normalized_skill_lookup[skill_lower])
+                continue
+
+            # Try partial match (be cautious with this, might be too broad)
+            # Example: 'React' should match 'React Native' but maybe not 'Reactive Programming'
+            matched = False
+            for db_skill_lower, skill_id in self.normalized_skill_lookup.items():
+                 # Check if extracted skill contains a known skill OR known skill contains extracted skill
+                 # Add word boundaries (\b) to avoid matching parts of words e.g. 'java' in 'javascript'
+                 if re.search(r'\b' + re.escape(db_skill_lower) + r'\b', skill_lower) or \
+                    re.search(r'\b' + re.escape(skill_lower) + r'\b', db_skill_lower):
+                     skill_ids.add(skill_id)
+                     matched = True
+                     # break # Decide if one partial match is enough per skill
+
+            # if not matched:
+            #     logger.debug(f"Skill '{skill}' not found in known skills database.")
+
+        return list(skill_ids)
+
+    def _select_jobs_for_matching(self, job_id: Optional[int], max_jobs: int) -> List[Dict[str, Any]]:
+        """Selects jobs to be used in the matching process."""
+        if job_id:
+            selected_jobs = [job for job in self.jobs if job.get("id") == job_id]
+            if not selected_jobs:
+                logger.warning(f"Specific job ID {job_id} not found for matching.")
+            return selected_jobs
+        else:
+            # Match against multiple jobs, prioritize recent ones
+            try:
+                # Sort by posting date (assuming 'YYYY-MM-DD' format or similar)
+                sorted_jobs = sorted(
+                    self.jobs,
+                    key=lambda j: j.get("posting_date", "0000-00-00"),
+                    reverse=True
+                )
+            except Exception as e:
+                 logger.warning(f"Could not sort jobs by date ({e}), using original order.")
+                 sorted_jobs = self.jobs
+
+            selected_jobs = sorted_jobs[:max_jobs]
+            logger.info(f"Selected top {len(selected_jobs)} most recent jobs for matching.")
+            return selected_jobs
+
+    def _prepare_job_description_for_matching(self, job: Dict[str, Any]) -> Dict[str, Any]:
+         """Formats a job dictionary with necessary details for matching prompts."""
+         employer = next((e for e in self.employers if e.get("id") == job.get("employer_id")), {})
+         company_name = employer.get("company_name", f"Company ID {job.get('employer_id')}")
+         skill_names = [self.skill_lookup.get(sid, f"Unknown Skill ID {sid}") for sid in job.get("skills", [])]
+
+         return {
+             "job_id": job.get("id"),
+             "title": job.get("title"),
+             "company": company_name,
+             "description": job.get("description", ""),
+             "requirements": job.get("requirements", []), # Assuming requirements is a list of strings
+             "skills": skill_names,
+             "location": job.get("location", "Not specified"),
+             "contract_type": job.get("contract_type", "Not specified"),
+             "remote_option": job.get("remote_option", False)
+         }
+
+    def _prepare_email_context(self, template_id: str, recipient_type: str, context: Dict[str, Any]) -> Dict[str, Any]:
+         """Creates a richer context dictionary for the email generation prompt."""
+         enhanced_context = {"communication_purpose": template_id.replace("_", " ")}
+
+         if recipient_type == "candidate":
+             enhanced_context.update({
+                 "recipient_name": context.get("candidate_name", "Candidate"),
+                 "job_title": context.get("job_title", "the position"),
+                 "company_name": context.get("company_name", "our client"),
+                 "candidate_skills": context.get("skills", []), # Candidate's general skills
+                 "matching_job_skills": context.get("matching_skills", []), # Skills relevant to this job
+                 "candidate_status": context.get("candidate_status", "applicant"), # e.g., applicant, interviewed, offered
+                 # Add more relevant candidate context if available
+             })
+         else: # recipient_type == "company"
+             enhanced_context.update({
+                 "recipient_name": context.get("contact_person", "Hiring Manager"),
+                 "company_name": context.get("company_name", "your company"),
+                 "job_title": context.get("job_title", "the open position"),
+                 "industry": context.get("industry", "your industry"),
+                 # Add more relevant company/job context if available
+             })
+         return enhanced_context
+
+
+    # --- Fallback Methods (Rule-Based) ---
+
+    def analyze_cv_fallback(self, cv_text: str) -> Dict[str, Any]:
+        """
+        Fallback: Analyze CV content using basic rule-based extraction.
+        """
+        logger.debug("Executing rule-based CV analysis fallback.")
+        skills = self._extract_skills_fallback(cv_text)
+        education = self._extract_education_fallback(cv_text)
+        experience, total_years = self._extract_experience_fallback(cv_text)
+        summary = self._generate_summary_fallback(skills, education, experience, total_years)
+        skill_ids = self._map_skills_to_ids(skills) # Still try to map skills
+
         return {
             "skills": skills,
+            "skill_ids": skill_ids,
             "education": education,
             "experience": experience,
             "total_experience_years": total_years,
-            "summary": summary
+            "summary": summary,
+            "analysis_method": "rule-based-fallback" # Indicate method used
         }
-    
-    def match_jobs(self, skills: List[str], experience_years: int = 0) -> List[Dict[str, Any]]:
-        """Match extracted CV data against available jobs using rule-based approach"""
+
+    def match_jobs_fallback(self, skills: List[str], experience_years: int = 0) -> List[Dict[str, Any]]:
+        """Fallback: Match skills against jobs using simple keyword intersection."""
+        logger.debug("Executing rule-based job matching fallback.")
         matches = []
-        
+        candidate_skills_lower = {s.lower() for s in skills}
+
         for job in self.jobs:
-            # Get job skills (in a real app, you'd have better matching logic)
-            job_skills = []
-            for skill_id in job.get("skills", []):
-                # In a real app, you'd query this from the database
-                # Here we're just creating mock skill names based on IDs
-                skill_name = self.skill_lookup.get(skill_id, f"Skill-{skill_id}")
-                job_skills.append(skill_name)
-            
-            # Calculate match score (simple intersection of skills)
-            matching_skills = [skill for skill in skills if any(
-                skill.lower() in js.lower() or js.lower() in skill.lower() 
-                for js in job_skills
-            )]
-            
-            match_score = len(matching_skills) / max(len(job_skills), 1) * 100
-            
-            if match_score > 30:  # Arbitrary threshold
+            job_skill_names = [self.skill_lookup.get(sid, f"skill_{sid}").lower() for sid in job.get("skills", [])]
+            job_skills_lower = set(job_skill_names)
+
+            if not job_skills_lower: continue # Skip jobs with no listed skills
+
+            matching_skills_set = candidate_skills_lower.intersection(job_skills_lower)
+            match_score = (len(matching_skills_set) / len(job_skills_lower)) * 100
+
+            # Basic experience check (example)
+            required_exp = job.get("required_experience_years", 0)
+            if experience_years < required_exp:
+                 match_score *= 0.8 # Penalize if experience is lower
+
+            if match_score > 30:  # Keep threshold simple
+                employer = next((e for e in self.employers if e.get("id") == job.get("employer_id")), {})
                 matches.append({
                     "job_id": job["id"],
                     "job_title": job["title"],
-                    "employer_id": job["employer_id"],
-                    "match_score": match_score,
-                    "matching_skills": matching_skills
+                    "company_name": employer.get("company_name", f"Company {job.get('employer_id')}"),
+                    "match_score": round(match_score, 2),
+                    "matching_skills": list(matching_skills_set), # Show matched skills
+                    "match_method": "rule-based-fallback"
                 })
-        
-        # Sort by match score descending
+
         matches.sort(key=lambda x: x["match_score"], reverse=True)
         return matches
-    
-    def generate_email(self, template_id: str, context: Dict[str, Any]) -> Dict[str, str]:
-        """Generate an email based on template and context"""
-        if template_id not in self.email_templates:
-            raise ValueError(f"Template with ID {template_id} not found")
-        
-        template = self.email_templates[template_id]
-        subject = template["subject"]
-        body = template["template"]
-        
-        # Replace placeholders in subject
-        for key, value in context.items():
-            placeholder = "{{" + key + "}}"
-            subject = subject.replace(placeholder, str(value))
-        
-        # Replace placeholders in body
-        for key, value in context.items():
-            placeholder = "{{" + key + "}}"
-            if isinstance(value, list) and key == "matching_skills":
-                formatted_skills = "\n".join([f"- {skill}" for skill in value])
-                body = body.replace(placeholder, formatted_skills)
-            else:
-                body = body.replace(placeholder, str(value))
-                
-        return {
-            "subject": subject,
-            "body": body
-        }
-    
-    # Helper methods for rule-based analysis
-    
-    def _extract_skills(self, cv_text: str) -> List[str]:
-        """Extract skills from CV text using pattern matching"""
-        # Look for a skills section
-        skills_pattern = re.compile(r'SKILLS\n(.*?)(?:\n\n|\Z)', re.DOTALL | re.IGNORECASE)
-        skills_match = skills_pattern.search(cv_text)
-        
-        if skills_match:
-            skills_text = skills_match.group(1)
-            skills = [skill.strip() for skill in re.split(r',|\n', skills_text) if skill.strip()]
-            return skills
-        
-        # Fallback: extract common skills
-        common_skills = [
-            "Python", "JavaScript", "Java", "C#", "React", "Angular", 
-            "Node.js", "SQL", "AWS", "Docker", "Kubernetes", "Digital Marketing",
-            "SEO", "Content Strategy", "Social Media"
-        ]
-        
-        found_skills = []
-        for skill in common_skills:
-            if re.search(r'\b' + re.escape(skill) + r'\b', cv_text, re.IGNORECASE):
-                found_skills.append(skill)
-                
-        return found_skills
-    
-    def _extract_education(self, cv_text: str) -> List[Dict[str, str]]:
-        """Extract education information"""
-        education_pattern = re.compile(r'EDUCATION\n(.*?)(?:\n\n|\Z)', re.DOTALL | re.IGNORECASE)
-        education_match = education_pattern.search(cv_text)
-        
-        if not education_match:
-            return []
-            
-        education_text = education_match.group(1)
-        education_entries = education_text.strip().split('\n')
-        
-        education = []
-        for entry in education_entries:
-            parts = entry.split('|')
-            if len(parts) >= 2:
-                degree = parts[0].strip()
-                institution = parts[1].strip()
-                years = parts[2].strip() if len(parts) > 2 else ""
-                
-                education.append({
-                    "degree": degree,
-                    "institution": institution,
-                    "years": years
-                })
-                
-        return education
-    
-    def _extract_experience(self, cv_text: str) -> Tuple[List[Dict[str, str]], int]:
-        """Extract work experience information and total years"""
-        experience_pattern = re.compile(r'WORK EXPERIENCE\n(.*?)(?:EDUCATION|\Z)', re.DOTALL | re.IGNORECASE)
-        experience_match = experience_pattern.search(cv_text)
-        
-        if not experience_match:
-            return [], 0
-            
-        experience_text = experience_match.group(1)
-        experience_entries = re.split(r'\n(?=\w+\s+\|)', experience_text.strip())
-        
-        experience = []
+
+
+    def _extract_skills_fallback(self, cv_text: str) -> List[str]:
+        """Fallback: Extract skills using regex for a 'Skills' section or common keywords."""
+        skills = set()
+        # Try finding a dedicated skills section
+        skills_section_match = re.search(r'(?i)^\s*(skills|technical skills|proficiencies)[:\n](.*?)(?=\n\s*(\w+\s+){1,3}:|\n\s*(experience|education|projects)|\Z)', cv_text, re.MULTILINE | re.DOTALL)
+        if skills_section_match:
+            skills_text = skills_section_match.group(2)
+            # Split by common delimiters (comma, newline, semicolon, bullet points)
+            potential_skills = re.split(r'[,\n;•*]|\s-\s', skills_text)
+            for skill in potential_skills:
+                cleaned_skill = skill.strip()
+                if cleaned_skill and len(cleaned_skill) > 1: # Avoid single characters
+                    skills.add(cleaned_skill)
+
+        # If section not found or empty, look for known skills anywhere
+        if not skills:
+            known_skills_pattern = r'\b(Python|Java|C\+\+|C#|JavaScript|React|Angular|Vue|Node\.js|SQL|NoSQL|MongoDB|PostgreSQL|AWS|Azure|GCP|Docker|Kubernetes|Terraform|Git|Jenkins|Agile|Scrum|JIRA|Communication|Leadership|Problem Solving|Teamwork|Data Analysis|Machine Learning|AI|Project Management)\b'
+            found_skills = re.findall(known_skills_pattern, cv_text, re.IGNORECASE)
+            skills.update(found_skills)
+
+        return sorted(list(skills))
+
+
+    def _extract_education_fallback(self, cv_text: str) -> List[Dict[str, str]]:
+        """Fallback: Extract education using regex for an 'Education' section."""
+        education_list = []
+        # Find education section
+        edu_section_match = re.search(r'(?i)^\s*(education|academic background)[:\n](.*?)(?=\n\s*(\w+\s+){1,3}:|\n\s*(experience|skills|projects)|\Z)', cv_text, re.MULTILINE | re.DOTALL)
+
+        if edu_section_match:
+            edu_text = edu_section_match.group(2).strip()
+            # Split into potential entries (assuming one per line or separated by double newline)
+            entries = re.split(r'\n\s*\n|\n(?!\s)', edu_text) # Split by double newline or single newline if not followed by whitespace (indentation)
+
+            for entry in entries:
+                entry = entry.strip()
+                if not entry: continue
+
+                degree_match = re.search(r'(?i)(B\.?S\.?|M\.?S\.?|Ph\.?D\.?|Bachelor|Master|Doctorate)\s*(?:of|in)?\s*([\w\s]+)', entry)
+                institution_match = re.search(r'(?i)(University|Institute|College|School)\s*of\s*([\w\s]+)|([\w\s]+)\s*(University|Institute|College|School)', entry)
+                year_match = re.search(r'(\b\d{4}\b)(?:\s*-\s*(\b\d{4}\b|Present))?', entry) # Find years like 2020-2024 or 2022
+
+                edu_dict = {
+                    "degree": degree_match.group(0).strip() if degree_match else "N/A",
+                    "institution": institution_match.group(0).strip() if institution_match else "N/A",
+                    "field": degree_match.group(2).strip() if degree_match and len(degree_match.groups()) > 1 and degree_match.group(2) else "N/A",
+                    "years": year_match.group(0).strip() if year_match else "N/A"
+                }
+                if edu_dict["degree"] != "N/A" or edu_dict["institution"] != "N/A":
+                    education_list.append(edu_dict)
+
+        return education_list
+
+    def _extract_experience_fallback(self, cv_text: str) -> Tuple[List[Dict[str, str]], int]:
+        """Fallback: Extract experience using regex for 'Experience' section and calculate years."""
+        experience_list = []
         total_years = 0
-        
-        for entry in experience_entries:
-            parts = entry.split('|')
-            if len(parts) >= 3:
-                title = parts[0].strip()
-                company = parts[1].strip()
-                duration = parts[2].strip()
-                
-                # Extract years (crude approximation for demo purposes)
-                years_pattern = re.compile(r'(\d{4})\s*-\s*(Present|\d{4})')
-                years_match = years_pattern.search(duration)
-                
-                if years_match:
-                    start_year = int(years_match.group(1))
-                    end_year = 2024 if years_match.group(2) == "Present" else int(years_match.group(2))
-                    years_duration = end_year - start_year
-                    total_years += years_duration
-                
-                experience.append({
+        current_year = datetime.datetime.now().year
+
+        # Find experience section
+        exp_section_match = re.search(r'(?i)^\s*(experience|work experience|professional experience)[:\n](.*?)(?=\n\s*(\w+\s+){1,3}:|\n\s*(education|skills|projects)|\Z)', cv_text, re.MULTILINE | re.DOTALL)
+
+        if exp_section_match:
+            exp_text = exp_section_match.group(2).strip()
+             # Split into entries (often separated by company name or double newline)
+            # This regex looks for a potential job title line followed by lines that don't look like a new job title/company
+            entries = re.split(r'\n(?=\s*[A-Z][\w\s]+,\s*[A-Z][\w\s]+|\n)', exp_text) # Heuristic split
+
+            for entry in entries:
+                entry = entry.strip()
+                if not entry or len(entry.split('\n')) < 2: continue # Skip short/empty entries
+
+                lines = entry.split('\n')
+                title_company_line = lines[0]
+                description_lines = lines[1:]
+
+                # Extract Title, Company (heuristic)
+                title = "N/A"
+                company = "N/A"
+                parts = re.split(r'\s+at\s+|\s*,\s*|\s*\|\s*', title_company_line) # Split by 'at', comma, or pipe
+                if len(parts) >= 1: title = parts[0].strip()
+                if len(parts) >= 2: company = parts[1].strip()
+
+                # Extract Duration and calculate years
+                duration_str = "N/A"
+                years_in_role = 0
+                date_match = re.search(r'(\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{4}|\b\d{4}\b)\s*-\s*(\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{4}|\b\d{4}\b|Present|Current)', title_company_line + " " + "".join(description_lines), re.IGNORECASE) # Search dates anywhere in entry
+
+                if date_match:
+                    duration_str = date_match.group(0).strip()
+                    start_year_match = re.search(r'\b(\d{4})\b', date_match.group(1))
+                    start_year = int(start_year_match.group(1)) if start_year_match else 0
+
+                    end_year_str = date_match.group(2)
+                    if re.search(r'(?i)Present|Current', end_year_str):
+                        end_year = current_year
+                    else:
+                         end_year_match = re.search(r'\b(\d{4})\b', end_year_str)
+                         end_year = int(end_year_match.group(1)) if end_year_match else start_year # Assume 0 duration if end year invalid
+
+                    if start_year > 0:
+                        years_in_role = max(0, end_year - start_year + 1) # Add 1 for inclusive years
+                        # Simple addition, doesn't handle overlaps perfectly
+                        total_years += years_in_role
+
+
+                exp_dict = {
                     "title": title,
                     "company": company,
-                    "duration": duration
-                })
-                
-        return experience, total_years
-    
-    def _generate_summary(self, skills: List[str], education: List[Dict[str, str]], 
-                         experience: List[Dict[str, str]]) -> str:
-        """Generate a summary of the candidate's profile"""
-        # This would be a sophisticated NLG task in a real system
-        # Here we'll just create a simple template-based summary
-        
-        exp_years = len(experience)
-        skill_text = ", ".join(skills[:5])
-        if len(skills) > 5:
-            skill_text += f", and {len(skills) - 5} more"
-            
-        education_level = "Master's" if any("Master" in edu.get("degree", "") for edu in education) else "Bachelor's"
-        
-        summary = f"Candidate with approximately {exp_years} years of experience, "
-        summary += f"skilled in {skill_text}. "
-        summary += f"Has a {education_level} level education"
-        
-        if experience:
-            latest_role = experience[0]["title"]
-            latest_company = experience[0]["company"]
-            summary += f" and most recently worked as a {latest_role} at {latest_company}."
+                    "duration": duration_str,
+                    "responsibilities": [line.strip('-* ').strip() for line in description_lines if line.strip()]
+                }
+                experience_list.append(exp_dict)
+
+        # Refine total_years (simple approach, doesn't handle gaps/overlaps well)
+        # A more robust calculation would parse dates properly and track timelines.
+        # For fallback, this rough sum might be acceptable.
+        return experience_list, total_years
+
+
+    def _generate_summary_fallback(self, skills: List[str], education: List[Dict[str, str]],
+                                   experience: List[Dict[str, str]], total_years: int) -> str:
+        """Fallback: Generate a very basic summary string."""
+        summary_parts = []
+        if total_years > 0:
+            summary_parts.append(f"Experienced professional with approximately {total_years} years in the field.")
+        elif experience:
+             summary_parts.append("Professional with work experience.")
         else:
-            summary += "."
-            
-        return summary
+             summary_parts.append("Entry-level candidate.")
+
+        if skills:
+            skill_preview = ", ".join(skills[:3])
+            summary_parts.append(f"Key skills include {skill_preview}{'...' if len(skills) > 3 else '.'}")
+
+        if education:
+            highest_degree = "degree" # Placeholder
+            # Simple logic to find highest degree (can be improved)
+            if any("Ph.D" in edu.get("degree", "") for edu in education): highest_degree = "Ph.D."
+            elif any("Master" in edu.get("degree", "") or "M.S" in edu.get("degree", "") for edu in education): highest_degree = "Master's degree"
+            elif any("Bachelor" in edu.get("degree", "") or "B.S" in edu.get("degree", "") for edu in education): highest_degree = "Bachelor's degree"
+            summary_parts.append(f"Holds a {highest_degree}.")
+
+        if experience:
+            latest_role = experience[0].get("title", "a recent role")
+            latest_company = experience[0].get("company", "a previous company")
+            summary_parts.append(f"Most recently worked as {latest_role} at {latest_company}.")
+
+        return " ".join(summary_parts) if summary_parts else "Candidate profile summary could not be generated."
+
+    def _generate_basic_interview_questions(self, position: str) -> List[Dict[str, str]]:
+        """Fallback: Generate generic interview questions."""
+        logger.debug(f"Generating basic fallback interview questions for {position}.")
+        return [
+            {"question": f"Tell me about your background and why you're interested in this {position} role.", "purpose": "Motivation and general fit", "evaluation_guidance": "Look for enthusiasm, relevant background summary, clear reasons for applying."},
+            {"question": "Can you describe a challenging project or task you handled? What was the situation, what did you do, and what was the result?", "purpose": "Problem-solving, STAR method", "evaluation_guidance": "Assess clarity, specific actions taken, ownership, and quantifiable results."},
+            {"question": f"What specific skills or experiences make you a strong candidate for this {position} position?", "purpose": "Self-assessment, relevant skills", "evaluation_guidance": "Check alignment with job requirements, specific examples."},
+            {"question": "How do you prefer to work in a team environment? Describe a time you collaborated effectively.", "purpose": "Teamwork and collaboration style", "evaluation_guidance": "Look for positive attitude towards teamwork, clear examples of contribution."},
+            {"question": "Where do you see yourself professionally in the next 3-5 years, and how does this role fit into your goals?", "purpose": "Career goals and ambition", "evaluation_guidance": "Assess realistic goals, alignment with potential growth in the role/company."},
+            {"question": "Do you have any questions for me about the role, the team, or the company?", "purpose": "Candidate engagement and curiosity", "evaluation_guidance": "Note the quality and relevance of questions asked."}
+        ]
+
+    def _generate_basic_job_description(self, position: str, company_name: str, industry: Optional[str] = None) -> Dict[str, Union[str, List[str]]]:
+        """Fallback: Generate a very basic job description structure."""
+        logger.debug(f"Generating basic fallback job description for {position}.")
+        industry_text = f" in the {industry} industry" if industry else ""
+        overview = f"{company_name} is a company{industry_text} seeking passionate individuals."
+        responsibilities = [f"Perform duties related to the {position} role.", "Collaborate with team members.", "Contribute to company goals."]
+        qualifications = ["Relevant experience or education.", "Strong work ethic.", "Good communication skills."]
+        skills = ["Basic industry knowledge", "Communication"]
+        benefits = ["Competitive compensation", "Standard benefits package"]
+
+        full_text = f"""
+**Job Title:** {position}
+
+**Company Overview:**
+{overview}
+
+**Role Summary:**
+We are looking for a dedicated {position} to join our team.
+
+**Key Responsibilities:**
+- {responsibilities[0]}
+- {responsibilities[1]}
+- {responsibilities[2]}
+
+**Required Qualifications:**
+- {qualifications[0]}
+- {qualifications[1]}
+- {qualifications[2]}
+
+**Required Skills:**
+- {skills[0]}
+- {skills[1]}
+
+**Benefits:**
+- {benefits[0]}
+- {benefits[1]}
+
+**Application Process:**
+Please apply via our careers page or contact HR.
+        """
+
+        return {
+            "title": position,
+            "company_overview": overview,
+            "role_summary": f"Seeking a {position}.",
+            "key_responsibilities": responsibilities,
+            "required_qualifications": qualifications,
+            "preferred_qualifications": ["N/A"],
+            "required_skills": skills,
+            "benefits": benefits,
+            "location_environment": "To be discussed.",
+            "application_process": "Please apply via our careers page.",
+            "full_text": full_text.strip(),
+            "generation_method": "rule-based-fallback"
+        }
+
+
+# --- Example Usage (Optional) ---
+if __name__ == "__main__":
+    # Create fake data directories/files if they don't exist for basic testing
+    if not DATA_DIR.exists():
+        DATA_DIR.mkdir()
+
+    def create_dummy_json(filepath, content):
+        if not filepath.exists():
+            try:
+                with open(filepath, "w") as f:
+                    json.dump(content, f, indent=2)
+                logger.info(f"Created dummy file: {filepath}")
+            except Exception as e:
+                 logger.error(f"Failed to create dummy file {filepath}: {e}")
+
+
+    create_dummy_json(JOBS_FILE, [{"id": 1, "title": "Software Engineer", "employer_id": 101, "skills": [1, 2], "posting_date": "2024-01-15", "required_experience_years": 2, "description": "Develop amazing software."}])
+    create_dummy_json(EMAIL_TEMPLATES_FILE, [{"id": "candidate_rejection", "subject": "Update on your application for {{job_title}}", "template": "Dear {{candidate_name}},\nThank you for your interest... Unfortunately...\n\nMatching Skills:\n{{matching_skills}}", "purpose": "Inform candidate about rejection"}])
+    create_dummy_json(CANDIDATES_FILE, [{"id": 1, "name": "Jane Doe"}])
+    create_dummy_json(USERS_FILE, [{"id": 1, "name": "Admin User"}])
+    create_dummy_json(EMPLOYERS_FILE, [{"id": 101, "company_name": "Tech Solutions Inc."}])
+    create_dummy_json(SKILLS_FILE, [{"id": 1, "name": "Python"}, {"id": 2, "name": "SQL"}, {"id": 3, "name": "Communication"}])
+
+
+    # --- Initialize Service ---
+    ai_service = AIService()
+
+    # --- Test CV Analysis ---
+    print("\n--- Testing CV Analysis ---")
+    sample_cv = """
+    John Doe
+    john.doe@email.com | 555-1234
+
+    SUMMARY
+    Highly motivated Software Engineer with 5 years of experience in Python development and cloud technologies. Proven ability to deliver high-quality code and work effectively in Agile teams. Seeking a challenging role at a forward-thinking company.
+
+    SKILLS
+    Python, Java, SQL, NoSQL, AWS, Docker, Kubernetes, Git, Agile, Communication, Problem Solving
+
+    WORK EXPERIENCE
+    Senior Software Engineer | Tech Innovations Inc. | Jan 2021 - Present
+    - Developed backend services using Python and Flask.
+    - Managed AWS infrastructure (EC2, S3, RDS).
+    - Led a team of 3 junior engineers.
+
+    Software Engineer | Web Solutions Co. | Jun 2019 - Dec 2020
+    - Built web applications using JavaScript and React.
+    - Worked with PostgreSQL databases.
+
+    EDUCATION
+    Master of Science in Computer Science | State University | 2017 - 2019
+    Bachelor of Science in Software Engineering | Tech College | 2013 - 2017
+    """
+    if ai_service.client:
+        cv_analysis_result = ai_service.analyze_cv_with_openai(sample_cv)
+        print("CV Analysis Result (OpenAI):")
+        print(json.dumps(cv_analysis_result, indent=2))
+    else:
+        cv_analysis_result = ai_service.analyze_cv_fallback(sample_cv)
+        print("CV Analysis Result (Fallback):")
+        print(json.dumps(cv_analysis_result, indent=2))
+
+
+    # --- Test Job Matching ---
+    print("\n--- Testing Job Matching ---")
+    # Use the result from CV analysis
+    if cv_analysis_result:
+        if ai_service.client:
+            job_matches = ai_service.match_jobs_with_openai(cv_analysis_result)
+            print("Job Matching Result (OpenAI):")
+            print(json.dumps(job_matches, indent=2))
+        else:
+            job_matches = ai_service.match_jobs_fallback(
+                skills=cv_analysis_result.get("skills", []),
+                experience_years=cv_analysis_result.get("total_experience_years", 0)
+            )
+            print("Job Matching Result (Fallback):")
+            print(json.dumps(job_matches, indent=2))
+
+
+    # --- Test Email Generation ---
+    print("\n--- Testing Email Generation ---")
+    email_context = {
+        "candidate_name": "Jane Applicant",
+        "job_title": "Software Engineer",
+        "company_name": "Tech Solutions Inc.",
+        "matching_skills": ["Python", "SQL"] # Example skills
+    }
+    if ai_service.client:
+        email_result = ai_service.generate_email_with_openai("candidate_rejection", email_context)
+        print("Email Generation Result (OpenAI):")
+        print(f"Subject: {email_result['subject']}")
+        print(f"Body:\n{email_result['body']}")
+    else:
+        # Fallback test requires the template to exist
+        template_exists = "candidate_rejection" in ai_service.email_templates
+        if template_exists:
+             email_result = ai_service.generate_email_with_openai("candidate_rejection", email_context) # Will use fallback
+             print("Email Generation Result (Fallback):")
+             print(f"Subject: {email_result['subject']}")
+             print(f"Body:\n{email_result['body']}")
+        else:
+             print("Skipping fallback email test: 'candidate_rejection' template not loaded.")
+
+
+    # --- Test Interview Question Generation ---
+    print("\n--- Testing Interview Question Generation ---")
+    job_details_example = {
+        "title": "Senior Python Developer",
+        "company_name": "Cloud Services Ltd.",
+        "description": "Seeking an experienced Python developer to build scalable cloud applications.",
+        "skills": ["Python", "AWS", "Flask/Django", "Microservices", "SQL"],
+        "requirements": ["5+ years Python experience", "Experience with cloud platforms (AWS preferred)", "Strong understanding of REST APIs"]
+    }
+    candidate_example = cv_analysis_result # Use previous analysis if available
+
+    if ai_service.client:
+        interview_questions = ai_service.generate_interview_questions(job_details_example, candidate_example)
+        print("Interview Questions (OpenAI):")
+        print(json.dumps(interview_questions, indent=2))
+    else:
+        interview_questions = ai_service._generate_basic_interview_questions(job_details_example["title"])
+        print("Interview Questions (Fallback):")
+        print(json.dumps(interview_questions, indent=2))
+
+
+    # --- Test Job Description Generation ---
+    print("\n--- Testing Job Description Generation ---")
+    if ai_service.client:
+        jd_result = ai_service.generate_job_description(
+            position="Data Scientist",
+            company_name="AI Insights Corp",
+            industry="Artificial Intelligence",
+            required_skills=["Python", "Machine Learning", "SQL", "Statistics"]
+        )
+        print("Job Description (OpenAI):")
+        # print(json.dumps(jd_result, indent=2)) # Print structured
+        print(jd_result.get("full_text", "Full text not generated.")) # Print full text
+    else:
+         jd_result = ai_service._generate_basic_job_description(
+             position="Data Scientist",
+             company_name="AI Insights Corp",
+             industry="Artificial Intelligence"
+         )
+         print("Job Description (Fallback):")
+         print(jd_result.get("full_text", "Full text not generated."))
+
