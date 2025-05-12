@@ -1,0 +1,17 @@
+# OpenAI API Key - Get yours at https://platform.openai.com/
+OPENAI_API_KEY=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
+
+# Database Configuration
+DATABASE_URL=sqlite:///./recruitement_plus.db
+
+# Security
+SECRET_KEY=mysecretkey
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Email Configuration
+SMTP_SERVER=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=user@example.com
+SMTP_PASSWORD=password
+EMAIL_FROM=noreply@recplus.com

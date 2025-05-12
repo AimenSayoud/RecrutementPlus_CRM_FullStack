@@ -19,7 +19,7 @@ import {
   setOpenAIKey
 } from '@/lib/openai-service';
 import { Candidate, Company } from '@/types';
-import CommandMenu from '@/components/ui/CommandMenu';
+import { CommandMenu } from '@/components/ui/CommandMenu';
 import SimpleSearchMenu from '@/components/ui/SimpleSearchMenu';
 import ModernAIMessage from '@/components/ui/ModernAIMessage';
 import ModernAIInput from '@/components/ui/ModernAIInput';
