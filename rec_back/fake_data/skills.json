@@ -1,0 +1,19 @@
+[
+  { "id": 1, "name": "Python" },
+  { "id": 2, "name": "JavaScript" },
+  { "id": 3, "name": "React" },
+  { "id": 4, "name": "SQL" },
+  { "id": 5, "name": "Digital Marketing" },
+  { "id": 6, "name": "SEO" },
+  { "id": 7, "name": "Content Strategy" },
+  { "id": 8, "name": "Social Media" },
+  { "id": 9, "name": "Docker" },
+  { "id": 10, "name": "Node.js" },
+  { "id": 11, "name": "CI/CD" },
+  { "id": 12, "name": "Machine Learning" },
+  { "id": 13, "name": "TensorFlow" },
+  { "id": 14, "name": "Data Analysis" },
+  { "id": 15, "name": "CSS" },
+  { "id": 16, "name": "Kubernetes" },
+  { "id": 17, "name": "AWS" }
+]

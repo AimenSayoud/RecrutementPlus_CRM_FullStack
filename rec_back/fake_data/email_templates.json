@@ -1,0 +1,12 @@
+[
+  {
+    "id": "cv_acknowledgment",
+    "subject": "Thank you for your application to {{company_name}}",
+    "template": "Dear {{candidate_name}},\n\nThank you for submitting your application for the {{job_title}} position at {{company_name}}. We appreciate your interest in joining our team.\n\nOur recruitment team is currently reviewing your profile and will be in touch with you soon regarding the next steps of the selection process.\n\nBased on our initial analysis of your profile:\n\n{{cv_analysis}}\n\nWe have noted the following key skills that align with this position:\n{{matching_skills}}\n\nThanks again for your interest in {{company_name}}. We look forward to potentially working with you.\n\nBest regards,\n{{consultant_name}}\nRecruitment Consultant\nRecrutementPlus"
+  },
+  {
+    "id": "interview_invitation",
+    "subject": "Interview Invitation: {{job_title}} at {{company_name}}",
+    "template": "Dear {{candidate_name}},\n\nWe're pleased to inform you that after reviewing your application for the {{job_title}} position at {{company_name}}, we would like to invite you for an interview.\n\nYour profile has shown impressive strengths in the following areas:\n{{cv_analysis}}\n\nWhich particularly align with this role's requirements for:\n{{matching_skills}}\n\nCould you please let us know your availability for an interview in the coming week? The interview will last approximately 45 minutes and will be conducted via video conference.\n\nWe look forward to discussing your qualifications and experience in more detail.\n\nBest regards,\n{{consultant_name}}\nRecruitment Consultant\nRecrutementPlus"
+  }
+]

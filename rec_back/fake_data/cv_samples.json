@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "candidate_user_id": 1,
+    "content": "JOHN DOE\nSenior Software Developer\njohn.doe@example.com | +33612345678 | Paris, France\n\nSKILLS\nPython, JavaScript, React, Node.js, SQL, Docker, Kubernetes, AWS, CI/CD\n\nWORK EXPERIENCE\nSenior Developer | Tech Solutions | Mar 2020 - Present\n- Led development of enterprise web applications using React and Node.js\n- Implemented microservices architecture using Docker and Kubernetes\n- Reduced system response time by 40% through optimization\n\nWeb Developer | Digital Agency | Jul 2017 - Feb 2020\n- Developed responsive front-end interfaces using React\n- Collaborated with UX designers to implement user-friendly interfaces\n- Maintained and improved existing client websites\n\nEDUCATION\nMaster's in Computer Science | Université Paris-Saclay | 2015-2017\nBachelor's in Computer Science | Université de Lyon | 2012-2015"
+  },
+  {
+    "id": 2,
+    "candidate_user_id": 2,
+    "content": "JANE SMITH\nDigital Marketing Specialist\njane.smith@example.com | +33687654321 | Lyon, France\n\nSKILLS\nDigital Marketing, SEO, SEM, Content Strategy, Social Media Management, Google Analytics, Facebook Ads, Email Marketing, Content Creation\n\nWORK EXPERIENCE\nDigital Marketing Manager | Marketing Pro | Jan 2019 - Present\n- Developed and executed comprehensive digital marketing strategies\n- Increased organic traffic by 65% through targeted SEO campaigns\n- Managed €50,000 monthly ad budget across Google and Facebook\n\nMarketing Specialist | BrandBoost | Mar 2017 - Dec 2018\n- Created content for social media channels and blog\n- Assisted in email marketing campaigns with 25% open rate\n- Supported SEO initiatives resulting in first page rankings\n\nEDUCATION\nMaster's in Marketing | EM Lyon | 2015-2017\nBachelor's in Business Administration | ESSEC | 2012-2015"
+  }
+]

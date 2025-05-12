@@ -1,0 +1,132 @@
+[
+  {
+    "id": 1,
+    "employer_id": 1,
+    "title": "Full Stack Developer",
+    "description": "We are looking for an experienced Full Stack Developer who is comfortable with both front-end and back-end development.",
+    "responsibilities": [
+      "Design and develop high-quality web applications",
+      "Work with product team to understand requirements",
+      "Optimize applications for maximum speed and scalability"
+    ],
+    "requirements": [
+      "3+ years of experience with JavaScript, React, and Node.js",
+      "Strong understanding of database design",
+      "Experience with RESTful APIs"
+    ],
+    "location": "Paris, France",
+    "contract_type": "Permanent",
+    "salary_range": {
+      "min": 55000,
+      "max": 75000
+    },
+    "remote_option": true,
+    "posting_date": "2024-04-01",
+    "status": "Open",
+    "skills": [2, 3, 10, 11]
+  },
+  {
+    "id": 2,
+    "employer_id": 1,
+    "title": "Data Scientist",
+    "description": "Join our AI team to develop cutting-edge machine learning solutions for our clients.",
+    "responsibilities": [
+      "Design and implement ML models",
+      "Work with large datasets",
+      "Present findings to technical and non-technical stakeholders"
+    ],
+    "requirements": [
+      "Advanced degree in Computer Science, Statistics, or related field",
+      "Experience with Python, TensorFlow, and PyTorch",
+      "Strong knowledge of data visualization tools"
+    ],
+    "location": "Paris, France",
+    "contract_type": "Permanent",
+    "salary_range": {
+      "min": 65000,
+      "max": 85000
+    },
+    "remote_option": true,
+    "posting_date": "2024-04-10",
+    "status": "Open",
+    "skills": [1, 12, 13, 14]
+  },
+  {
+    "id": 3,
+    "employer_id": 2,
+    "title": "Digital Marketing Specialist",
+    "description": "We are seeking a Digital Marketing Specialist to join our growing team in Lyon.",
+    "responsibilities": [
+      "Develop and execute digital marketing campaigns",
+      "Manage social media presence",
+      "Analyze campaign performance and optimize strategies"
+    ],
+    "requirements": [
+      "2+ years of experience in digital marketing",
+      "Proficiency in SEO, SEM, and social media marketing",
+      "Excellent analytical skills"
+    ],
+    "location": "Lyon, France",
+    "contract_type": "Permanent",
+    "salary_range": {
+      "min": 45000,
+      "max": 60000
+    },
+    "remote_option": false,
+    "posting_date": "2024-04-15",
+    "status": "Open",
+    "skills": [5, 6, 7, 8]
+  },
+  {
+    "id": 4,
+    "employer_id": 2,
+    "title": "Frontend Developer",
+    "description": "Join our team building next-generation digital marketing solutions.",
+    "responsibilities": [
+      "Develop responsive user interfaces",
+      "Collaborate with UX designers",
+      "Optimize application for maximum speed and scalability"
+    ],
+    "requirements": [
+      "3+ years of experience with React",
+      "Strong HTML, CSS, and JavaScript skills",
+      "Experience with modern frontend tools and libraries"
+    ],
+    "location": "Lyon, France",
+    "contract_type": "Contract",
+    "salary_range": {
+      "min": 50000,
+      "max": 65000
+    },
+    "remote_option": true,
+    "posting_date": "2024-04-05",
+    "status": "Open",
+    "skills": [2, 3, 15]
+  },
+  {
+    "id": 5,
+    "employer_id": 1,
+    "title": "DevOps Engineer",
+    "description": "Join our infrastructure team to build and maintain robust CI/CD pipelines and cloud infrastructure.",
+    "responsibilities": [
+      "Design and implement CI/CD pipelines",
+      "Manage cloud infrastructure on AWS",
+      "Implement security best practices"
+    ],
+    "requirements": [
+      "Experience with Docker, Kubernetes, and Jenkins",
+      "Strong Linux administration skills",
+      "Knowledge of infrastructure as code tools like Terraform"
+    ],
+    "location": "Paris, France",
+    "contract_type": "Permanent",
+    "salary_range": {
+      "min": 60000,
+      "max": 80000
+    },
+    "remote_option": true,
+    "posting_date": "2024-04-18",
+    "status": "Open",
+    "skills": [9, 11, 16, 17]
+  }
+]

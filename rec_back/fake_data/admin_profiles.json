@@ -1,0 +1,25 @@
+[
+  {
+    "id": 1,
+    "user_id": 7,
+    "permissions": ["user_management", "report_generation", "dashboard_access"],
+    "activities": [
+      {
+        "id": 1,
+        "action": "Created new user",
+        "timestamp": "2024-04-10T11:23:45",
+        "target_type": "user",
+        "target_id": 3,
+        "details": "Created new consultant (ID: 3)"
+      },
+      {
+        "id": 2,
+        "action": "Generated report",
+        "timestamp": "2024-04-11T15:30:12",
+        "target_type": "report",
+        "target_id": null,
+        "details": "Monthly placement report"
+      }
+    ]
+  }
+]
