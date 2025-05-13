@@ -3,61 +3,67 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTheme } from '@/app/context/ThemeContext';
 import Input from '@/components/ui/Input';
-import Badge from '@/components/ui/Badge';
 import { Candidate, Company } from '@/types';
+import { FiSearch, FiUsers, FiBriefcase, FiX, FiAlertCircle, FiLoader } from 'react-icons/fi';
+import Button from './Button';
 
 interface SimpleSearchMenuProps {
   isOpen: boolean;
   type: 'candidates' | 'companies';
   items: (Candidate | Company)[];
+  isLoading?: boolean;
+  error?: string | null;
   onSelect: (item: Candidate | Company) => void;
   onClose: () => void;
+  title?: string;
 }
 
 const SimpleSearchMenu: React.FC<SimpleSearchMenuProps> = ({
   isOpen,
   type,
   items,
+  isLoading = false,
+  error = null,
   onSelect,
-  onClose
+  onClose,
+  title,
 }) => {
   const { colors, theme } = useTheme();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filteredItems, setFilteredItems] = useState<(Candidate | Company)[]>(items);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filteredItems, setFilteredItems] = useState<(Candidate | Company)[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Focus input when menu opens
+  console.log("SimpleSearchMenu items:", items.length);
+  console.log("SimpleSearchMenu is loading:", isLoading);
+  console.log("SimpleSearchMenu is open:", isOpen);
+
+  // Reset search when menu opens
   useEffect(() => {
-    if (isOpen && inputRef.current) {
+    if (isOpen) {
+      setSearchTerm('');
+      setSelectedIndex(0);
+      
+      // Focus the input after a short delay to ensure DOM is updated
       setTimeout(() => {
-        inputRef.current?.focus();
+        if (inputRef.current) inputRef.current.focus();
       }, 100);
     }
   }, [isOpen]);
 
-  // Reset when opened
-  useEffect(() => {
-    if (isOpen) {
-      setSearchTerm('');
-      setFilteredItems(items);
-      setSelectedIndex(0);
-    }
-  }, [isOpen, items]);
-
-  // Handle outside clicks
+  // Handle clicks outside the menu
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         onClose();
       }
     };
-
+    
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
-
+    
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
@@ -65,208 +71,189 @@ const SimpleSearchMenu: React.FC<SimpleSearchMenuProps> = ({
 
   // Filter items based on search term
   useEffect(() => {
-    if (!searchTerm.trim()) {
-      setFilteredItems(items);
+    if (isLoading || error) {
+      setFilteredItems([]);
       return;
     }
 
-    const lowerSearchTerm = searchTerm.toLowerCase();
+    let filtered: (Candidate | Company)[] = [];
     
     if (type === 'candidates') {
-      const filtered = items.filter(item => {
-        const candidate = item as Candidate;
-        return (
-          (candidate.firstName?.toLowerCase() || '').includes(lowerSearchTerm) ||
-          (candidate.lastName?.toLowerCase() || '').includes(lowerSearchTerm) ||
-          (candidate.email?.toLowerCase() || '').includes(lowerSearchTerm) ||
-          (candidate.position?.toLowerCase() || '').includes(lowerSearchTerm)
-        );
-      });
-      setFilteredItems(filtered);
+      filtered = searchTerm
+        ? (items as Candidate[]).filter(c =>
+            `${c.firstName} ${c.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (c.email && c.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+            (c.position && c.position.toLowerCase().includes(searchTerm.toLowerCase()))
+          )
+        : items;
     } else {
-      const filtered = items.filter(item => {
-        const company = item as Company;
-        return (
-          (company.name?.toLowerCase() || '').includes(lowerSearchTerm) ||
-          (company.industry?.toLowerCase() || '').includes(lowerSearchTerm) ||
-          (company.contactPerson?.toLowerCase() || '').includes(lowerSearchTerm) ||
-          (company.contactEmail?.toLowerCase() || '').includes(lowerSearchTerm)
-        );
-      });
-      setFilteredItems(filtered);
+      filtered = searchTerm
+        ? (items as Company[]).filter(c =>
+            c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (c.industry && c.industry.toLowerCase().includes(searchTerm.toLowerCase())) ||
+            (c.contactPerson && c.contactPerson.toLowerCase().includes(searchTerm.toLowerCase()))
+          )
+        : items;
     }
     
-    setSelectedIndex(0);
-  }, [searchTerm, items, type]);
+    console.log("Filtered items:", filtered.length);
+    setFilteredItems(filtered);
+    setSelectedIndex(0); // Reset selection when filter changes
+  }, [items, searchTerm, type, isLoading, error]);
 
-  // Handle keyboard navigation
+  // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const itemCount = filteredItems.length;
+    
+    // Ignore navigation keys if no items
+    if (itemCount === 0 && ['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) {
+      e.preventDefault();
+      return;
+    }
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex(prev => (prev + 1) % filteredItems.length);
+      setSelectedIndex(prev => (prev + 1) % itemCount);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedIndex(prev => (prev - 1 + filteredItems.length) % filteredItems.length);
-    } else if (e.key === 'Enter') {
+      setSelectedIndex(prev => (prev - 1 + itemCount) % itemCount);
+    } else if (e.key === 'Enter' && filteredItems[selectedIndex]) {
       e.preventDefault();
-      if (filteredItems[selectedIndex]) {
-        onSelect(filteredItems[selectedIndex]);
-      }
+      onSelect(filteredItems[selectedIndex]);
     } else if (e.key === 'Escape') {
       e.preventDefault();
       onClose();
     }
   };
 
-  // Render an item (candidate or company)
-  const renderItem = (item: Candidate | Company, index: number) => {
-    const isCandidate = type === 'candidates';
-    
-    if (isCandidate) {
-      const candidate = item as Candidate;
-      return (
-        <div
-          key={candidate.id}
-          className={`px-3 py-2 flex items-center cursor-pointer ${
-            index === selectedIndex ? 'bg-gray-100 dark:bg-gray-700' : ''
-          }`}
-          onClick={() => onSelect(candidate)}
-        >
-          <div 
-            className="w-8 h-8 rounded-full flex items-center justify-center mr-2 flex-shrink-0 text-white font-medium"
-            style={{ backgroundColor: colors.primary }}
-          >
-            {(candidate.firstName?.charAt(0) || '') + (candidate.lastName?.charAt(0) || '')}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="font-medium text-sm flex items-center" style={{ color: colors.text }}>
-              {candidate.firstName || 'No First Name'} {candidate.lastName || 'No Last Name'}
-              {candidate.status && (
-                <Badge
-                  variant={
-                    candidate.status === 'hired' ? 'success' :
-                    candidate.status === 'rejected' ? 'danger' :
-                    candidate.status === 'offer' ? 'warning' :
-                    'primary'
-                  }
-                  className="ml-2 text-xs py-px px-1.5"
-                >
-                  {candidate.status}
-                </Badge>
-              )}
-            </div>
-            <div className="text-xs truncate" style={{ color: `${colors.text}80` }}>
-              {candidate.position || 'No Position'} • {candidate.email || 'No Email'}
-            </div>
-          </div>
-        </div>
-      );
-    } else {
-      const company = item as Company;
-      return (
-        <div
-          key={company.id}
-          className={`px-3 py-2 flex items-center cursor-pointer ${
-            index === selectedIndex ? 'bg-gray-100 dark:bg-gray-700' : ''
-          }`}
-          onClick={() => onSelect(company)}
-        >
-          <div 
-            className="w-8 h-8 rounded-md flex items-center justify-center mr-2 flex-shrink-0 text-white font-medium"
-            style={{ backgroundColor: colors.secondary }}
-          >
-            {company.name?.charAt(0) || 'C'}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="font-medium text-sm" style={{ color: colors.text }}>
-              {company.name || 'Unnamed Company'}
-            </div>
-            <div className="text-xs truncate" style={{ color: `${colors.text}80` }}>
-              {company.industry || 'No Industry'} • {typeof company.openPositions === 'number' ? `${company.openPositions} position${company.openPositions !== 1 ? 's' : ''}` : 'No open positions'}
-            </div>
-          </div>
-        </div>
-      );
-    }
+  // Handle item selection by click
+  const handleItemClick = (item: Candidate | Company) => {
+    onSelect(item);
   };
 
-  // If not open, don't render
+  // No need to render if not open
   if (!isOpen) return null;
 
   return (
-    <AnimatePresence>
-      <motion.div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2 }}
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div
+        ref={menuRef}
+        className="w-full max-w-lg rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+        style={{ backgroundColor: colors.card, border: `1px solid ${colors.border}` }}
+        role="dialog"
+        aria-modal="true"
       >
-        <motion.div
-          ref={menuRef}
-          className="w-full max-w-lg rounded-lg shadow-xl overflow-hidden"
-          style={{ backgroundColor: colors.card, border: `1px solid ${colors.border}` }}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 20 }}
-          transition={{ duration: 0.2, delay: 0.1 }}
-        >
-          <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: colors.border }}>
-            <h3 className="font-medium" style={{ color: colors.text }}>
-              {type === 'candidates' ? 'Search Candidates' : 'Search Companies'}
-            </h3>
-            <button
-              className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-              onClick={onClose}
-              aria-label="Close"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+        {/* Header */}
+        <header className="p-5 border-b flex items-center justify-between flex-shrink-0" style={{ borderColor: colors.border }}>
+          <h3 className="text-lg font-semibold" style={{ color: colors.text }}>
+            {title || (type === 'candidates' ? 'Search Candidates' : 'Search Companies')}
+          </h3>
+          <button
+            className="p-1.5 rounded-full transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+            onClick={onClose}
+            aria-label="Close search menu"
+          >
+            <FiX className="w-5 h-5" />
+          </button>
+        </header>
 
-          <div className="p-3 border-b" style={{ borderColor: colors.border }}>
-            <Input
-              ref={inputRef}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={`Search ${type}...`}
-              fullWidth
-              leftIcon={
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              }
-            />
-          </div>
+        {/* Search Input */}
+        <div className="p-4 border-b" style={{ borderColor: colors.border }}>
+          <Input
+            ref={inputRef}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={`Search ${type === 'candidates' ? 'candidates' : 'companies'}...`}
+            fullWidth
+            leftIcon={<FiSearch className="w-4 h-4 text-gray-400" />}
+            className="text-base"
+          />
+        </div>
 
-          <div className="py-1 max-h-60 overflow-y-auto">
-            {filteredItems.length > 0 ? (
-              filteredItems.map((item, index) => renderItem(item, index))
-            ) : (
-              <div className="px-3 py-4 text-center" style={{ color: `${colors.text}60` }}>
-                <p>No results found</p>
-              </div>
-            )}
-          </div>
-
-          <div className="p-3 border-t flex justify-between items-center" style={{ borderColor: colors.border }}>
-            <button
-              className="text-sm px-3 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              style={{ color: `${colors.text}80` }}
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-            <div className="text-xs" style={{ color: `${colors.text}60` }}>
-              <span>Use ↑↓ to navigate, Enter to select, Esc to close</span>
+        {/* List of Items */}
+        <div className="py-2 flex-1 overflow-y-auto">
+          {isLoading ? (
+            <div className="px-4 py-8 text-center flex flex-col items-center justify-center" style={{ color: `${colors.text}99` }}>
+              <FiLoader className="w-8 h-8 mb-3 animate-spin" style={{ color: colors.primary }} />
+              <p className="font-medium">Loading {type === 'candidates' ? 'candidates' : 'companies'}...</p>
             </div>
+          ) : error ? (
+            <div className="px-4 py-8 text-center flex flex-col items-center justify-center" style={{ color: colors.text }}>
+              <FiAlertCircle className="w-10 h-10 mb-3 text-red-500" />
+              <p className="font-medium text-red-600 dark:text-red-400">Error loading data</p>
+              <p className="text-sm opacity-70 mt-1">{error}</p>
+            </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="px-4 py-8 text-center" style={{ color: `${colors.text}99` }}>
+              <div className="motion-safe:animate-fadeIn">
+                <FiSearch className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">
+                  {searchTerm
+                    ? `No ${type === 'candidates' ? 'candidates' : 'companies'} found for "${searchTerm}"`
+                    : `No ${type === 'candidates' ? 'candidates' : 'companies'} available`}
+                </p>
+                <p className="text-sm opacity-70">
+                  {searchTerm ? 'Try a different search term.' : 'There are no items to display.'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            filteredItems.map((item, index) => {
+              const isCandidate = type === 'candidates';
+              const candidate = isCandidate ? (item as Candidate) : null;
+              const company = !isCandidate ? (item as Company) : null;
+
+              return (
+                <div
+                  key={item.id}
+                  className={`px-4 py-3 flex items-center cursor-pointer rounded-lg mx-2 my-1 transition-colors duration-150`}
+                  style={{
+                    backgroundColor: selectedIndex === index ? (theme === 'light' ? `${colors.primary}1A` : `${colors.primary}33`) : 'transparent',
+                    color: selectedIndex === index ? colors.primary : colors.text,
+                  }}
+                  onClick={() => handleItemClick(item)}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                  role="option"
+                  aria-selected={selectedIndex === index}
+                >
+                  <div
+                    className={`w-8 h-8 flex items-center justify-center mr-3 flex-shrink-0 text-white font-medium ${isCandidate ? 'rounded-full' : 'rounded-md'}`}
+                    style={{ backgroundColor: isCandidate ? colors.primary : colors.secondary }}
+                  >
+                    {isCandidate
+                      ? `${candidate?.firstName?.[0]}${candidate?.lastName?.[0]}`
+                      : company?.name?.[0]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm">
+                      {isCandidate
+                        ? `${candidate?.firstName} ${candidate?.lastName}`
+                        : company?.name}
+                    </div>
+                    <div className="text-xs opacity-70 truncate">
+                      {isCandidate
+                        ? `${candidate?.position || 'No position'} · ${candidate?.email || 'No email'}`
+                        : `${company?.industry || 'No industry'} · ${company?.contactPerson || 'No contact'}`}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer */}
+        <footer className="p-4 border-t flex justify-between items-center flex-shrink-0" style={{ borderColor: colors.border }}>
+          <Button variant="outline" onClick={onClose} size="sm">
+            Cancel
+          </Button>
+          <div className="text-xs opacity-60" style={{ color: colors.text }}>
+            <span>&uarr;&darr; Navigate, Enter to select, Esc to close</span>
           </div>
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+        </footer>
+      </div>
+    </div>
   );
 };
 

@@ -4,28 +4,32 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
 import { useAuth } from '@/app/context/AuthContext';
-import { motion } from 'framer-motion';
-import { apiService } from '@/lib';
-import { useApiQuery } from '@/hooks/useApiQuery';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useDataStore } from '@/store/useDataStore';
 import {
   generateCandidateEmail,
   generateCompanyEmail,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  generateInterviewQuestions,
   generatePositionInterviewQuestions,
-  generateJobDescription,
+  generateJobDescriptionService,
   generateCandidateFeedback,
   processGeneralQuery,
-  setOpenAIKey
+  setOpenAIKey,
+  analyzeCv,
 } from '@/lib/openai-service';
 import { Candidate, Company } from '@/types';
-import { CommandMenu } from '@/components/ui/CommandMenu';
+
+// UI Components
+import { CommandMenu, CMD_ANALYZE_CV, CMD_GENERATE_EMAIL, CMD_GENERATE_INTERVIEW_QUESTIONS, 
+  CMD_GENERATE_JOB_DESCRIPTION, CMD_GENERATE_CANDIDATE_FEEDBACK, CMD_GENERATE_SUGGESTIONS,
+  CMD_OPEN_CHAT, CMD_SEARCH_CANDIDATE, CMD_SEARCH_COMPANY } from '@/components/ui/CommandMenu';
 import SimpleSearchMenu from '@/components/ui/SimpleSearchMenu';
 import ModernAIMessage from '@/components/ui/ModernAIMessage';
 import ModernAIInput from '@/components/ui/ModernAIInput';
 import ModernEntityCard from '@/components/ui/ModernEntityCard';
+import Input from '@/components/ui/Input';
+import Button from '@/components/ui/Button';
+import { FiCpu, FiSettings } from 'react-icons/fi';
 
-// Message type
 interface Message {
   id: string;
   content: string;
@@ -39,1162 +43,742 @@ interface Message {
   };
 }
 
-// Command interface
-interface Command {
-  id: string;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-}
-
-// API Key Settings Modal Component
 const ApiKeySettingsModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
   const { colors, theme } = useTheme();
-  const [apiKey, setApiKey] = useState('');
-  
+  const [apiKeyInput, setApiKeyInput] = useState('');
+
+  const handleSaveKey = () => {
+    if (apiKeyInput.trim().startsWith('sk-')) {
+      setOpenAIKey(apiKeyInput.trim());
+      onClose();
+    }
+  };
+
   if (!isOpen) return null;
   
   return (
-    <div className="fixed inset-0 flex items-center justify-center z-50 backdrop-blur-sm bg-black bg-opacity-50">
-      <motion.div
+    <div className="fixed inset-0 flex items-center justify-center z-50 backdrop-blur-sm bg-black bg-opacity-50 p-4">
+      <div
         className="rounded-xl shadow-xl max-w-md w-full overflow-hidden"
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.2 }}
         style={{
           background: theme === 'light'
             ? 'linear-gradient(180deg, #FFFFFF 0%, #F9FAFB 100%)'
             : 'linear-gradient(180deg, #1E293B 0%, #0F172A 100%)',
-          boxShadow: theme === 'light'
-            ? '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
-            : '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)'
         }}
       >
-        {/* Header */}
         <div className="px-6 py-4 border-b" style={{ borderColor: theme === 'light' ? '#E2E8F0' : '#334155' }}>
           <h3 className="text-xl font-semibold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
-            OpenAI API Key Settings
+            OpenAI API Key (Frontend Fallback)
           </h3>
         </div>
-        
-        {/* Content */}
         <div className="p-6">
           <p className="text-sm mb-4" style={{ color: `${colors.text}90` }}>
-            Enter your OpenAI API key to enable AI features. This key will be stored securely in your browser&apos;s session storage and won&apos;t be sent to our servers.
+            If backend AI services are unavailable, the system might attempt direct OpenAI calls.
+            Enter your OpenAI API key here. It will be stored in session storage.
           </p>
-          
           <div className="space-y-1 mb-4">
-            <label className="block text-sm font-medium" style={{ color: colors.text }}>
+            <label htmlFor="apiKeyInputModal" className="block text-sm font-medium" style={{ color: colors.text }}>
               API Key
             </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-              style={{ 
-                backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A',
-                color: colors.text,
-                borderColor: theme === 'light' ? '#CBD5E1' : '#334155'
-              }}
+            <Input 
+              id="apiKeyInputModal" 
+              type="password" 
+              value={apiKeyInput} 
+              onChange={(e) => setApiKeyInput(e.target.value)} 
+              placeholder="sk-..." 
+              fullWidth 
+              className="p-3"
             />
             <p className="text-xs mt-1" style={{ color: `${colors.text}70` }}>
-              API keys start with &quot;sk-&quot;
+              API keys typically start with &quot;sk-&quot;
             </p>
           </div>
-          
-          {/* Footer with buttons */}
           <div className="flex justify-end gap-3 mt-6">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg border text-sm font-medium transition-colors"
-              style={{ 
-                borderColor: theme === 'light' ? '#CBD5E1' : '#334155',
-                color: theme === 'light' ? '#64748B' : '#94A3B8',
-                backgroundColor: theme === 'light' ? '#F8FAFC' : '#1E293B'
-              }}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                if (apiKey.trim()) {
-                  setOpenAIKey(apiKey.trim());
-                }
-                onClose();
-              }}
-              className="px-4 py-2 rounded-lg text-white text-sm font-medium transition-all"
-              style={{ 
-                background: 'linear-gradient(to right, #3B82F6, #4F46E5)',
-                boxShadow: '0 4px 6px -1px rgba(59, 130, 246, 0.3), 0 2px 4px -1px rgba(59, 130, 246, 0.2)',
-              }}
-              disabled={!apiKey.trim().startsWith('sk-')}
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button 
+              variant="primary" 
+              onClick={handleSaveKey} 
+              disabled={!apiKeyInput.trim().startsWith('sk-')}
             >
               Save API Key
-            </button>
+            </Button>
           </div>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 };
 
-// AI Assistant page component
 const AiAssistantPage = () => {
   const { colors, theme } = useTheme();
   const { user } = useAuth();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Use the Zustand store
+  const {
+    candidates,
+    companies,
+    selectedEntity,
+    isLoadingCandidates,
+    isLoadingCompanies,
+    candidatesError,
+    companiesError,
+    fetchCandidates,
+    fetchCompanies,
+    setSelectedCandidate,
+    setSelectedCompany,
+    clearSelectedEntity,
+  } = useDataStore();
+
   const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      content: 'Hello! I\'m your AI assistant. I can help you with writing emails, generating interview questions, creating job descriptions, and more. To use advanced AI features, please configure your OpenAI API key in the settings.',
-      sender: 'assistant',
-      timestamp: new Date(),
+    { 
+      id: 'initial-greeting', 
+      content: "Hello! I'm your AI assistant. How can I help with your recruitment tasks today? Type '/' for commands.", 
+      sender: 'assistant', 
+      timestamp: new Date() 
     },
   ]);
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [showCandidateSearch, setShowCandidateSearch] = useState(false);
   const [showCompanySearch, setShowCompanySearch] = useState(false);
   const [showApiKeySettings, setShowApiKeySettings] = useState(false);
-  const [selectedEntity, setSelectedEntity] = useState<Candidate | Company | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [isGeneratingTemplate, setIsGeneratingTemplate] = useState(false);
-  const [templateType, setTemplateType] = useState<string | null>(null);
-  const [initialCommand, setInitialCommand] = useState<'search_candidate' | 'search_company' | null>(null);
+  const [commandThatNeedsEntity, setCommandThatNeedsEntity] = useState<string | null>(null);
 
-  // Fetch candidates and companies with error handling and fallbacks
-  const { data: candidates, error: candidatesError } = useApiQuery<Candidate[]>(
-    () => apiService.candidates.getAll(),
-    []
-  );
-
-  const { data: companies, error: companiesError } = useApiQuery<Company[]>(
-    () => apiService.companies.getAll(),
-    []
-  );
-
-  // Create fallback data if API calls fail
-  const fallbackCandidates: Candidate[] = !candidates && candidatesError ? [
-    {
-      id: 'cand-1',
-      firstName: 'Jean',
-      lastName: 'Dupont',
-      email: 'jean.dupont@example.com',
-      phone: '+33612345678',
-      position: 'Frontend Developer',
-      status: 'interview',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      tags: ['JavaScript', 'React'],
-      rating: 4,
-      officeId: '1'
-    },
-    {
-      id: 'cand-2',
-      firstName: 'Sarah',
-      lastName: 'Johnson',
-      email: 'sarah.j@example.com',
-      phone: '+1987654321',
-      position: 'UX Designer',
-      status: 'new',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      tags: ['UI/UX', 'Figma'],
-      rating: 3,
-      officeId: '1'
-    }
-  ] : [];
-
-  const fallbackCompanies: Company[] = !companies && companiesError ? [
-    {
-      id: 'comp-1',
-      name: 'TechCorp',
-      industry: 'Technology',
-      contactPerson: 'James Wilson',
-      contactEmail: 'james@techcorp.com',
-      contactPhone: '+1122334455',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      openPositions: 3,
-      officeId: '1'
-    },
-    {
-      id: 'comp-2',
-      name: 'Marketing Solutions',
-      industry: 'Marketing',
-      contactPerson: 'Emma Davis',
-      contactEmail: 'emma@marketingsolutions.com',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      openPositions: 2,
-      officeId: '1'
-    }
-  ] : [];
-
-  // Use actual data or fallbacks
-  const candidateData = candidates || fallbackCandidates;
-  const companyData = companies || fallbackCompanies;
-
-  // Scroll to bottom of messages when new ones are added
+  // Fetch data when component mounts
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    console.log("🚀 AI Assistant page mounted");
+    fetchCandidates(user?.officeId);
+    fetchCompanies(user?.officeId);
+  }, [fetchCandidates, fetchCompanies, user?.officeId]);
+
+  // Scroll to bottom when messages change
+  useEffect(() => { 
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
   }, [messages]);
 
-  // Available commands
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const availableCommands: Command[] = [
-    {
-      id: 'search',
-      label: 'Search',
-      description: 'Find candidates or companies',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
-      )
-    },
-    {
-      id: 'email',
-      label: 'Email Template',
-      description: 'Generate email templates',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-        </svg>
-      )
-    },
-    {
-      id: 'interview',
-      label: 'Interview Questions',
-      description: 'Create interview questions',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      )
-    },
-    {
-      id: 'job',
-      label: 'Job Description',
-      description: 'Create job descriptions',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
-      )
-    },
-    {
-      id: 'suggestions',
-      label: 'Suggestions',
-      description: 'Get personalized suggestions',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-        </svg>
-      )
-    }
-  ];
-
-  // Handle input changes
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setInput(value);
+  // Add a message to the chat
+  const addMessage = (message: Omit<Message, 'id' | 'timestamp'>) => {
+    setMessages(prev => [...prev, { ...message, id: Date.now().toString(), timestamp: new Date() }]);
   };
 
-  // Handle selection of a candidate
-  const handleSelectCandidate = (candidate: Candidate) => {
-    setSelectedEntity(candidate);
-    
-    // Add a message to indicate selection
-    const message: Message = {
-      id: Date.now().toString(),
-      content: `Selected candidate: ${candidate.firstName} ${candidate.lastName}`,
-      sender: 'user',
-      timestamp: new Date(),
-      entityReference: {
-        type: 'candidate',
-        id: candidate.id,
-        name: `${candidate.firstName} ${candidate.lastName}`,
-      },
-    };
-    
-    setMessages(prev => [...prev, message]);
-    
-    // If we're in the process of generating a template, continue with that
-    if (templateType) {
-      generateTemplateForEntity(templateType, candidate);
-      setTemplateType(null);
-    }
+  // Update the last message in the chat
+  const updateLastMessage = (updatedContent: Partial<Message>) => {
+    setMessages(prev => {
+      const newMessages = [...prev];
+      if (newMessages.length > 0) {
+        newMessages[newMessages.length - 1] = { 
+          ...newMessages[newMessages.length - 1], 
+          ...updatedContent, 
+          isLoading: false 
+        };
+      }
+      return newMessages;
+    });
   };
 
-  // Handle selection of a company
-  const handleSelectCompany = (company: Company) => {
-    setSelectedEntity(company);
-    
-    // Add a message to indicate selection
-    const message: Message = {
-      id: Date.now().toString(),
-      content: `Selected company: ${company.name}`,
-      sender: 'user',
-      timestamp: new Date(),
-      entityReference: {
-        type: 'company',
-        id: company.id,
-        name: company.name,
-      },
-    };
-    
-    setMessages(prev => [...prev, message]);
-    
-    // If we're in the process of generating a template, continue with that
-    if (templateType) {
-      generateTemplateForEntity(templateType, company);
-      setTemplateType(null);
-    }
-  };
+  // Main function to generate AI responses
+  const generateAIResponse = async (userQuery: string): Promise<string> => {
+    console.log("🤖 Generating AI response for:", userQuery);
+    const lowerQuery = userQuery.toLowerCase();
 
-  // Generate template based on the selected entity
-  const generateTemplateForEntity = async (template: string, entity = selectedEntity) => {
-    if (!entity) return;
-    
-    setIsGeneratingTemplate(true);
-    
-    // Add loading message
-    const loadingMessage: Message = {
-      id: Date.now().toString(),
-      content: '',
-      sender: 'assistant',
-      timestamp: new Date(),
-      isLoading: true,
-    };
-    
-    setMessages(prev => [...prev, loadingMessage]);
-    
     try {
-      let response: string;
-      
-      if ('firstName' in entity) {
-        // It's a candidate
-        const candidate = entity as Candidate;
-        
-        if (template === 'email') {
-          response = await generateCandidateEmail(
-            candidate,
-            'introduce our services',
-            `Candidate Position: ${candidate.position}, Status: ${candidate.status}`
-          );
-        } else if (template === 'suggestions') {
-          try {
-            response = await processGeneralQuery(
-              `Generate 3-5 suggestions for working with candidate ${candidate.firstName} ${candidate.lastName} who has position ${candidate.position} and is currently in ${candidate.status} status.`,
-              `Be specific and provide actionable suggestions based on the candidate's profile.`
-            );
-          } catch (error) {
-            console.error("Error generating suggestions:", error);
-            // Fallback suggestion if API fails
-            response = `Here are some suggestions for working with ${candidate.firstName} ${candidate.lastName}:
-
-1. Schedule a follow-up interview to discuss their experience in ${candidate.position} roles
-2. Ask for portfolio samples relevant to their current status (${candidate.status})
-3. Connect them with team members in similar roles for a technical assessment
-4. Provide feedback on their application status regularly
-5. Share industry insights and company culture information to maintain engagement`;
+      // Handle CV Analysis directly if triggered by keyword
+      if (lowerQuery.startsWith('analyze cv') || lowerQuery.startsWith('/analyze_cv')) {
+        const cvText = userQuery.replace(/analyze cv/i, '').replace(/\/analyze_cv/i, '').trim();
+        if (cvText) {
+          const analysis = await analyzeCv(cvText);
+          
+          // Format the response
+          let formattedResponse = `✅ **CV Analysis Complete!**\n\n`;
+          if (analysis?.summary) formattedResponse += `**Summary:**\n${analysis.summary}\n\n`;
+          if (analysis?.total_experience_years !== undefined) {
+            formattedResponse += `**Total Experience:** ${analysis.total_experience_years} years\n`;
           }
-        } else {
-          response = await processGeneralQuery(
-            `What should I know about working with ${candidate.firstName} ${candidate.lastName}?`,
-            `Candidate position: ${candidate.position}, Status: ${candidate.status}`
-          );
-        }
-      } else {
-        // It's a company
-        const company = entity as Company;
-        
-        if (template === 'email') {
-          response = await generateCompanyEmail(
-            company,
-            'introduce our recruitment services',
-            `Company Industry: ${company.industry}, Open Positions: ${company.openPositions}`
-          );
-        } else if (template === 'suggestions') {
-          try {
-            response = await processGeneralQuery(
-              `Generate 3-5 suggestions for working with ${company.name} in the ${company.industry} industry with ${company.openPositions} open positions.`,
-              `Be specific and provide actionable suggestions based on the company's profile.`
-            );
-          } catch (error) {
-            console.error("Error generating suggestions:", error);
-            // Fallback suggestion if API fails
-            response = `Here are some suggestions for working with ${company.name}:
-
-1. Research their current market position in the ${company.industry} industry
-2. Prepare a tailored recruitment strategy for their ${company.openPositions} open positions
-3. Identify candidates with industry-specific experience in ${company.industry}
-4. Schedule a meeting with ${company.contactPerson} to discuss hiring priorities
-5. Create a custom talent pipeline aligned with their industry requirements`;
+          if (analysis?.skills && analysis.skills.length > 0) {
+            formattedResponse += `**Skills:** ${analysis.skills.join(', ')}\n`;
           }
-        } else {
-          response = await processGeneralQuery(
-            `What should I know about working with ${company.name}?`,
-            `Company Industry: ${company.industry}, Contact Person: ${company.contactPerson}`
-          );
+          if (analysis?.education && analysis.education.length > 0) {
+            formattedResponse += `**Education:**\n${analysis.education.map(edu => 
+              `  - ${edu.degree || 'N/A'} at ${edu.institution || 'N/A'} (${edu.end_year || 'N/A'})`
+            ).join('\n')}\n`;
+          }
+          if (analysis?.experience && analysis.experience.length > 0) { 
+            formattedResponse += `**Experience:**\n${analysis.experience.map(exp => 
+              `  - ${exp.title || 'N/A'} at ${exp.company || 'N/A'} (${exp.duration || 'N/A'})`
+            ).join('\n')}\n`;
+          }
+          
+          return formattedResponse.trim() || "CV Analyzed, but no specific details extracted.";
         }
+        return "It looks like you wanted to analyze a CV, but the text was missing. Please use the format: analyze cv [CV text here]";
       }
 
-      // Add signature to email templates
-      if (template === 'email') {
-        const userFullName = user?.name || 'Recruitment Consultant';
-        const userRole = user?.role === 'admin' ? 'Recruitment Manager' : 
-                         user?.role === 'super_admin' ? 'Senior Recruitment Manager' : 
-                         'Recruitment Consultant';
-        
-        response += `\n\nBest regards,\n${userFullName}\n${userRole}\nRecruitment Plus Team\ncontact@recruitmentplus.com | +1 (555) 123-4567`;
-      }
-      
-      // Replace loading message with actual response
-      setMessages(prev => {
-        const updatedMessages = [...prev];
-        const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-        
-        if (loadingIndex !== -1) {
-          updatedMessages[loadingIndex] = {
-            id: Date.now().toString(),
-            content: response,
-            sender: 'assistant',
-            timestamp: new Date(),
-            entityReference: {
-              type: 'firstName' in entity ? 'candidate' : 'company',
-              id: entity.id,
-              name: 'firstName' in entity 
-                ? `${(entity as Candidate).firstName} ${(entity as Candidate).lastName}`
-                : (entity as Company).name,
-            },
-          };
-        }
-        
-        return updatedMessages;
-      });
-    } catch (error) {
-      console.error('Error generating template:', error);
-      
-      // Replace loading message with error message
-      setMessages(prev => {
-        const updatedMessages = [...prev];
-        const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-        
-        if (loadingIndex !== -1) {
-          updatedMessages[loadingIndex] = {
-            id: Date.now().toString(),
-            content: "I'm sorry, I encountered an error generating your template. Please try again.",
-            sender: 'assistant',
-            timestamp: new Date(),
-          };
-        }
-        
-        return updatedMessages;
-      });
-    } finally {
-      setIsGeneratingTemplate(false);
-    }
-  };
-
-  // Generate AI response
-  const generateAIResponse = async (userQuery: string, entityRef?: Message['entityReference']) => {
-    try {
-      let response: string;
-      const lowerQuery = userQuery.toLowerCase();
-
-      // If there's a selected entity
+      // Handle queries with a selected entity context
       if (selectedEntity) {
-        if ('firstName' in selectedEntity) {
-          // Candidate
-          const candidate = selectedEntity;
-          const fullName = `${candidate.firstName} ${candidate.lastName}`;
-
-          if (lowerQuery.includes('email')) {
-            // Generate email for candidate
-            response = await generateCandidateEmail(
-              candidate,
-              lowerQuery.replace(/generate.*email.*for|generate.*email.*(to|about)/i, '').trim(),
-              `Current position: ${candidate.position}, Status: ${candidate.status}`
+        const isCandidate = 'firstName' in selectedEntity;
+        const entityName = isCandidate 
+          ? `${selectedEntity.firstName} ${selectedEntity.lastName}` 
+          : selectedEntity.name;
+        
+        if (isCandidate) { 
+          // Candidate context
+          const candidate = selectedEntity as Candidate;
+          
+          if (lowerQuery.includes('email') || lowerQuery.includes('draft an email')) {
+            const purpose = lowerQuery.includes('email for') 
+              ? lowerQuery.replace(/.*email for/i, '').trim() 
+              : 'general inquiry';
+              
+            return await generateCandidateEmail(
+              candidate, 
+              `Regarding: ${purpose}`, 
+              `From AI Assistant query: ${userQuery}`
             );
-            
-            // Add signature
-            const userFullName = user?.name || 'Recruitment Consultant';
-            const userRole = user?.role === 'admin' ? 'Recruitment Manager' : 
-                           user?.role === 'super_admin' ? 'Senior Recruitment Manager' : 
-                           'Recruitment Consultant';
-            
-            response += `\n\nBest regards,\n${userFullName}\n${userRole}\nRecruitment Plus Team\ncontact@recruitmentplus.com | +1 (555) 123-4567`;
-          } else if (lowerQuery.includes('interview question') || lowerQuery.includes('interview preparation')) {
-            // Generate interview questions based on candidate position
-            response = await generatePositionInterviewQuestions(
-              candidate.position,
-              undefined,
-              `These questions are for a candidate named ${fullName} with status: ${candidate.status}`
-            );
-          } else if (lowerQuery.includes('feedback')) {
-            // Generate feedback for candidate
-            response = await generateCandidateFeedback(
-              candidate,
-              lowerQuery.includes('interview') ? `After interview for ${candidate.position} position` : undefined
-            );
-          } else {
-            // Process general query related to candidate
-            response = await processGeneralQuery(userQuery, `This query is related to candidate ${fullName},
-              position: ${candidate.position}, status: ${candidate.status}`);
           }
-        } else {
-          // Company
-          const company = selectedEntity;
-
-          if (lowerQuery.includes('email')) {
-            // Generate email for company
-            response = await generateCompanyEmail(
-              company,
-              lowerQuery.replace(/generate.*email.*for|generate.*email.*(to|about)/i, '').trim(),
-              `Industry: ${company.industry}, Open positions: ${company.openPositions}`
+          
+          if (lowerQuery.includes('interview questions')) {
+            return await generatePositionInterviewQuestions(
+              candidate.position, 
+              undefined, 
+              `For candidate: ${candidate.firstName} ${candidate.lastName}`
             );
-            
-            // Add signature
-            const userFullName = user?.name || 'Recruitment Consultant';
-            const userRole = user?.role === 'admin' ? 'Recruitment Manager' : 
-                           user?.role === 'super_admin' ? 'Senior Recruitment Manager' : 
-                           'Recruitment Consultant';
-            
-            response += `\n\nBest regards,\n${userFullName}\n${userRole}\nRecruitment Plus Team\ncontact@recruitmentplus.com | +1 (555) 123-4567`;
-          } else if (lowerQuery.includes('job description')) {
-            // Extract position from query or use generic
-            const positionMatch = userQuery.match(/job description for (a |an )?(.*?)( position)? at/i);
-            const position = positionMatch ? positionMatch[2] : 'new';
-
-            response = await generateJobDescription(
-              position,
-              company.name,
-              company.industry
-            );
-          } else if (lowerQuery.includes('interview question')) {
-            // Extract position from query
-            const positionMatch = userQuery.match(/(interview questions|questions) for (a |an )?(.*?)( position)?( at| for)/i);
-            const position = positionMatch ? positionMatch[3] : 'candidate';
-
-            response = await generatePositionInterviewQuestions(
-              position,
-              company.name,
-              `For a position at ${company.name} in the ${company.industry} industry`
-            );
-          } else {
-            // Process general query related to company
-            response = await processGeneralQuery(userQuery, `This query is related to company ${company.name},
-              industry: ${company.industry}, contact: ${company.contactPerson}`);
           }
-        }
-      } else if (entityRef) {
-        // Use entity reference from previous message
-        const entity = entityRef.type === 'candidate'
-          ? candidateData.find(c => c.id === entityRef.id)
-          : companyData.find(c => c.id === entityRef.id);
-
-        if (entity) {
-          if (entityRef.type === 'candidate') {
-            const candidate = entity as Candidate;
-            const fullName = `${candidate.firstName} ${candidate.lastName}`;
-
-            if (lowerQuery.includes('email')) {
-              response = await generateCandidateEmail(
-                candidate,
-                lowerQuery.replace(/generate.*email.*for|generate.*email.*(to|about)/i, '').trim(),
-                `Current position: ${candidate.position}, Status: ${candidate.status}`
-              );
-              
-              // Add signature
-              const userFullName = user?.name || 'Recruitment Consultant';
-              const userRole = user?.role === 'admin' ? 'Recruitment Manager' : 
-                               user?.role === 'super_admin' ? 'Senior Recruitment Manager' : 
-                               'Recruitment Consultant';
-              
-              response += `\n\nBest regards,\n${userFullName}\n${userRole}\nRecruitment Plus Team\ncontact@recruitmentplus.com | +1 (555) 123-4567`;
-            } else if (lowerQuery.includes('interview question') || lowerQuery.includes('interview preparation')) {
-              response = await generatePositionInterviewQuestions(
-                candidate.position,
-                undefined,
-                `These questions are for a candidate named ${fullName} with status: ${candidate.status}`
-              );
-            } else if (lowerQuery.includes('feedback')) {
-              response = await generateCandidateFeedback(
-                candidate,
-                lowerQuery.includes('interview') ? `After interview for ${candidate.position} position` : undefined
-              );
-            } else {
-              response = await processGeneralQuery(userQuery, `This query is related to candidate ${fullName},
-                position: ${candidate.position}, status: ${candidate.status}`);
-            }
-          } else {
-            const company = entity as Company;
-
-            if (lowerQuery.includes('email')) {
-              response = await generateCompanyEmail(
-                company,
-                lowerQuery.replace(/generate.*email.*for|generate.*email.*(to|about)/i, '').trim(),
-                `Industry: ${company.industry}, Open positions: ${company.openPositions}`
-              );
-              
-              // Add signature
-              const userFullName = user?.name || 'Recruitment Consultant';
-              const userRole = user?.role === 'admin' ? 'Recruitment Manager' : 
-                               user?.role === 'super_admin' ? 'Senior Recruitment Manager' : 
-                               'Recruitment Consultant';
-              
-              response += `\n\nBest regards,\n${userFullName}\n${userRole}\nRecruitment Plus Team\ncontact@recruitmentplus.com | +1 (555) 123-4567`;
-            } else if (lowerQuery.includes('job description')) {
-              const positionMatch = userQuery.match(/job description for (a |an )?(.*?)( position)? at/i);
-              const position = positionMatch ? positionMatch[2] : 'new';
-
-              response = await generateJobDescription(
-                position,
-                company.name,
-                company.industry
-              );
-            } else if (lowerQuery.includes('interview question')) {
-              const positionMatch = userQuery.match(/(interview questions|questions) for (a |an )?(.*?)( position)?( at| for)/i);
-              const position = positionMatch ? positionMatch[3] : 'candidate';
-
-              response = await generatePositionInterviewQuestions(
-                position,
-                company.name,
-                `For a position at ${company.name} in the ${company.industry} industry`
-              );
-            } else {
-              response = await processGeneralQuery(userQuery, `This query is related to company ${company.name},
-                industry: ${company.industry}, contact: ${company.contactPerson}`);
-            }
+          
+          if (lowerQuery.includes('feedback')) {
+            return await generateCandidateFeedback(candidate);
           }
-        } else {
-          // Entity not found, process general query
-          response = await processGeneralQuery(userQuery);
-        }
-      } else {
-        // No entity selected or referenced
-
-        // Check if this is a request for job description
-        if (lowerQuery.includes('job description')) {
-          const positionMatch = userQuery.match(/job description for (a |an )?(.*?)( position)?/i);
-          const position = positionMatch ? positionMatch[2] : 'new';
-
-          response = await generateJobDescription(
-            position,
-            'your company',
-            undefined,
-            'Create a generic job description that can be customized later.'
+          
+          // Default for candidate context
+          return await processGeneralQuery(
+            userQuery, 
+            `Context: Candidate - ${entityName}, Position: ${candidate.position}`
           );
-        }
-        // Check if this is a request for interview questions
-        else if (lowerQuery.includes('interview question')) {
-          const positionMatch = userQuery.match(/(interview questions|questions) for (a |an )?(.*?)( position)?/i);
-          const position = positionMatch ? positionMatch[3] : 'candidate';
-
-          response = await generatePositionInterviewQuestions(
-            position
+          
+        } else { 
+          // Company context
+          const company = selectedEntity as Company;
+          
+          if (lowerQuery.includes('email') || lowerQuery.includes('draft an email')) {
+            const purpose = lowerQuery.includes('email for') 
+              ? lowerQuery.replace(/.*email for/i, '').trim() 
+              : 'general inquiry';
+              
+            return await generateCompanyEmail(
+              company, 
+              `Regarding: ${purpose}`, 
+              `From AI Assistant query: ${userQuery}`
+            );
+          }
+          
+          if (lowerQuery.includes('job description')) {
+            const positionMatch = lowerQuery.match(/job description for (?:an? )?(.*?) position/i);
+            const position = positionMatch?.[1]?.trim() || 'a suitable role';
+            
+            return await generateJobDescriptionService(position, company.name, company.industry);
+          }
+          
+          if (lowerQuery.includes('interview questions')) {
+            const positionMatch = lowerQuery.match(/interview questions for (?:an? )?(.*?) position/i);
+            const position = positionMatch?.[1]?.trim() || 'a role';
+            
+            return await generatePositionInterviewQuestions(position, company.name);
+          }
+          
+          // Default for company context
+          return await processGeneralQuery(
+            userQuery, 
+            `Context: Company - ${entityName}, Industry: ${company.industry}`
           );
-        }
-        // Handle feedback requests
-        else if (lowerQuery.includes('feedback')) {
-          response = await processGeneralQuery(
-            "Generate a template for candidate feedback after an interview",
-            "The user wants a general feedback template that can be customized for specific candidates."
-          );
-        }
-        // Process as general query
-        else {
-          response = await processGeneralQuery(userQuery);
         }
       }
 
-      return response;
-    } catch (error) {
-      console.error('Error generating AI response:', error);
-      return "I'm sorry, I encountered an error while processing your request. Please try again.";
+      // Handle generic queries without specific entity context
+      if (lowerQuery.includes('job description') || lowerQuery.includes('draft a job description')) {
+        const positionMatch = lowerQuery.match(/job description for (?:an? )?(.*?) position/i) || 
+                             lowerQuery.match(/draft a job description for (?:an? )?(.*?) position/i);
+        const position = positionMatch?.[1]?.trim() || 'a generic role';
+        
+        return await generateJobDescriptionService(position, 'Your Company (Generic)');
+      }
+      
+      if (lowerQuery.includes('interview questions') || lowerQuery.includes('create interview questions')) {
+        const positionMatch = lowerQuery.match(/interview questions for (?:an? )?(.*?) position/i) || 
+                             lowerQuery.match(/create interview questions for (?:an? )?(.*?) position/i);
+        const position = positionMatch?.[1]?.trim() || 'a generic role';
+        
+        return await generatePositionInterviewQuestions(position);
+      }
+
+      // Default to general query processing
+      return await processGeneralQuery(userQuery);
+
+    } catch (error: any) {
+      console.error("❌ Error in generateAIResponse:", error);
+      return `I encountered an issue processing that: ${error.message || "Please try a different query or check the service."}`;
     }
   };
 
   // Handle sending a message
-  const handleSendMessage = async () => {
-    if (!input.trim()) return;
-
-    // Get the last message for context
-    const lastMessage = messages[messages.length - 1];
-    const entityRef = lastMessage?.entityReference;
+  const handleSendMessage = async (query?: string) => {
+    const currentQuery = (query || input).trim();
+    if (!currentQuery || isProcessing) return;
 
     // Add user message
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      content: input,
-      sender: 'user',
-      timestamp: new Date(),
-    };
-    
-    setMessages(prev => [...prev, userMessage]);
+    addMessage({ content: currentQuery, sender: 'user' });
     setInput('');
-    setIsLoading(true);
     
-    // Add loading message
-    const loadingMessage: Message = {
-      id: (Date.now() + 1).toString(),
-      content: '',
-      sender: 'assistant',
-      timestamp: new Date(),
-      isLoading: true,
-    };
-    
-    setMessages(prev => [...prev, loadingMessage]);
-    
-    // Generate AI response
+    // Show loading state
+    setIsProcessing(true);
+    addMessage({ content: '', sender: 'assistant', isLoading: true });
+
     try {
-      const response = await generateAIResponse(input, entityRef);
+      // Generate response
+      const responseContent = await generateAIResponse(currentQuery);
       
-      // Replace loading message with actual response
-      setMessages(prev => {
-        const updatedMessages = [...prev];
-        const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-        
-        if (loadingIndex !== -1) {
-          updatedMessages[loadingIndex] = {
-            id: Date.now().toString(),
-            content: response,
-            sender: 'assistant',
-            timestamp: new Date(),
-            entityReference: selectedEntity ? {
-              type: 'firstName' in selectedEntity ? 'candidate' : 'company',
-              id: selectedEntity.id,
-              name: 'firstName' in selectedEntity 
-                ? `${(selectedEntity as Candidate).firstName} ${(selectedEntity as Candidate).lastName}`
-                : (selectedEntity as Company).name,
-            } : undefined
-          };
-        }
-        
-        return updatedMessages;
+      // Update message with response
+      updateLastMessage({
+        content: responseContent,
+        entityReference: selectedEntity ? {
+          type: 'firstName' in selectedEntity ? 'candidate' : 'company',
+          id: selectedEntity.id,
+          name: 'firstName' in selectedEntity
+            ? `${selectedEntity.firstName} ${selectedEntity.lastName}`
+            : selectedEntity.name,
+        } : undefined,
       });
-    } catch (error) {
-      console.error('Error handling message:', error);
-      
-      // Replace loading message with error message
-      setMessages(prev => {
-        const updatedMessages = [...prev];
-        const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-        
-        if (loadingIndex !== -1) {
-          updatedMessages[loadingIndex] = {
-            id: Date.now().toString(),
-            content: "I'm sorry, I encountered an error. Please try again later.",
-            sender: 'assistant',
-            timestamp: new Date(),
-          };
-        }
-        
-        return updatedMessages;
+    } catch (error: any) {
+      console.error('❌ Error sending message:', error);
+      updateLastMessage({ 
+        content: `Sorry, I encountered an error: ${error.message || 'Please try again.'}` 
       });
     } finally {
-      setIsLoading(false);
+      setIsProcessing(false);
+    }
+  };
+  
+  // Command action handlers
+  const handleGenerateGenericJobDescription = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    
+    addMessage({ 
+      content: "Generating a generic job description...", 
+      sender: 'assistant', 
+      isLoading: true 
+    });
+    
+    try {
+      const jd = await generateJobDescriptionService("General Position", "Our Company");
+      updateLastMessage({ content: jd });
+    } catch (error: any) {
+      updateLastMessage({ 
+        content: `Error generating job description: ${error.message || 'Please try again.'}` 
+      });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  // Handle key events
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleGenerateGenericInterviewQuestions = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    
+    addMessage({ 
+      content: "Generating generic interview questions...", 
+      sender: 'assistant', 
+      isLoading: true 
+    });
+    
+    try {
+      const questions = await generatePositionInterviewQuestions("General Role");
+      updateLastMessage({ content: questions });
+    } catch (error: any) {
+      updateLastMessage({ 
+        content: `Error generating interview questions: ${error.message || 'Please try again.'}` 
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Handle entity selection
+  const handleSelectCandidate = (candidate: Candidate) => {
+    console.log("👤 Selected candidate:", candidate.firstName, candidate.lastName);
+    setSelectedCandidate(candidate);
+    setShowCandidateSearch(false);
+    
+    const newName = `${candidate.firstName} ${candidate.lastName}`;
+    addMessage({ 
+      content: `Switched context to candidate: ${newName}. You can now ask questions or generate content related to them.`, 
+      sender: 'assistant' 
+    });
+    
+    // Execute pending command if there is one
+    if (commandThatNeedsEntity) {
+      triggerCommandAction(commandThatNeedsEntity, candidate);
+    }
+  };
+
+  const handleSelectCompany = (company: Company) => {
+    console.log("🏢 Selected company:", company.name);
+    setSelectedCompany(company);
+    setShowCompanySearch(false);
+    
+    addMessage({ 
+      content: `Switched context to company: ${company.name}. You can now ask questions or generate content related to them.`, 
+      sender: 'assistant' 
+    });
+    
+    // Execute pending command if there is one
+    if (commandThatNeedsEntity) {
+      triggerCommandAction(commandThatNeedsEntity, company);
+    }
+  };
+
+  // Execute a command with a selected entity
+  const triggerCommandAction = async (commandId: string, entity: Candidate | Company) => {
+    const entityName = 'firstName' in entity 
+      ? `${entity.firstName} ${entity.lastName}` 
+      : entity.name;
+      
+    console.log(`🔄 Executing command: ${commandId} for ${entityName}`);
+    
+    addMessage({ 
+      content: `Okay, I will ${commandId.replace(/_/g, ' ')} for ${entityName}. One moment...`, 
+      sender: 'assistant', 
+      isLoading: true 
+    });
+    
+    setIsProcessing(true);
+    setCommandThatNeedsEntity(null);
+
+    let responseContent = '';
+    try {
+      switch (commandId) {
+        case CMD_GENERATE_EMAIL:
+          responseContent = 'firstName' in entity
+            ? await generateCandidateEmail(entity as Candidate, "your specific email purpose")
+            : await generateCompanyEmail(entity as Company, "your specific email purpose");
+          break;
+          
+        case CMD_GENERATE_SUGGESTIONS:
+          responseContent = await processGeneralQuery(
+            `Provide 3-5 actionable suggestions for working with ${entityName}.`
+          );
+          break;
+          
+        case CMD_GENERATE_CANDIDATE_FEEDBACK:
+          if ('firstName' in entity) {
+            responseContent = await generateCandidateFeedback(entity as Candidate);
+          } else { 
+            responseContent = "Feedback generation is specifically for candidates."; 
+          }
+          break;
+          
+        case CMD_GENERATE_INTERVIEW_QUESTIONS:
+           if ('firstName' in entity) {
+             const cand = entity as Candidate;
+             responseContent = await generatePositionInterviewQuestions(
+               cand.position, 
+               undefined, 
+               `For candidate ${cand.firstName} ${cand.lastName}`
+             );
+           } else {
+             const comp = entity as Company;
+             responseContent = await generatePositionInterviewQuestions(
+               "a relevant role", 
+               comp.name
+             );
+           }
+          break;
+          
+        case CMD_GENERATE_JOB_DESCRIPTION:
+          if (!('firstName' in entity)) {
+            const comp = entity as Company;
+            responseContent = await generateJobDescriptionService(
+              "a new role", 
+              comp.name, 
+              comp.industry
+            );
+          } else { 
+            responseContent = "Job description generation is typically for companies. Please select a company or ask for a generic one."; 
+          }
+          break;
+          
+        case CMD_OPEN_CHAT:
+          responseContent = `Continuing our chat with focus on ${entityName}. What would you like to discuss or do?`;
+          break;
+          
+        default:
+          responseContent = `Action for "${commandId}" with entity ${entityName} is not implemented.`;
+      }
+      
+      updateLastMessage({ 
+        content: responseContent, 
+        entityReference: { 
+          type: 'firstName' in entity ? 'candidate' : 'company', 
+          id: entity.id, 
+          name: entityName 
+        } 
+      });
+    } catch (error: any) {
+      console.error(`❌ Error during action "${commandId}":`, error);
+      updateLastMessage({ 
+        content: `Error during action "${commandId}": ${error.message || 'Please try again.'}` 
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+  
+  // Handle command selection and entity requirements
+  const handleInitiateEntitySelectionForCommand = (
+    entityTypeRequired: 'candidate' | 'company' | 'either' | null,
+    commandId: string
+  ) => {
+    console.log(`🔄 Command initiated: ${commandId}, requires: ${entityTypeRequired}`);
+    setShowCommandMenu(false); 
+
+    // Handle commands that don't require entities
+    if (entityTypeRequired === null) {
+      if (commandId === CMD_ANALYZE_CV) {
+        addMessage({ 
+          content: "Understood. Please paste the CV text in the input field below and send it for analysis.", 
+          sender: 'assistant' 
+        });
+        return; 
+      }
+      
+      if (commandId === CMD_GENERATE_JOB_DESCRIPTION) {
+        addMessage({ 
+          content: "Okay, generating a generic job description template.", 
+          sender: 'assistant' 
+        });
+        handleGenerateGenericJobDescription();
+        return;
+      }
+      
+      if (commandId === CMD_GENERATE_INTERVIEW_QUESTIONS) {
+        addMessage({ 
+          content: "Okay, generating generic interview questions.", 
+          sender: 'assistant' 
+        });
+        handleGenerateGenericInterviewQuestions();
+        return;
+      }
+      
+      if(commandId === CMD_OPEN_CHAT && !selectedEntity) {
+        addMessage({ 
+          content: "You can ask general questions, or use /search_candidate or /search_company to set a context.", 
+          sender: 'assistant'
+        });
+        return;
+      }
+    }
+    
+    // Remember command for after entity selection
+    setCommandThatNeedsEntity(commandId); 
+
+    // Check if we already have the required entity selected
+    if (selectedEntity) {
+      const currentEntityType = 'firstName' in selectedEntity ? 'candidate' : 'company';
+      
+      if (entityTypeRequired === 'either' || entityTypeRequired === currentEntityType) {
+        triggerCommandAction(commandId, selectedEntity);
+        return;
+      } else {
+        addMessage({ 
+          content: `This command needs a ${entityTypeRequired}. You currently have a ${currentEntityType} selected. Please select a ${entityTypeRequired}.`, 
+          sender: 'assistant' 
+        });
+        
+        if (entityTypeRequired === 'candidate') {
+          setShowCandidateSearch(true);
+        } else if (entityTypeRequired === 'company') {
+          setShowCompanySearch(true);
+        }
+        return;
+      }
+    }
+    
+    // No entity selected, prompt for selection
+    if (entityTypeRequired === 'candidate') {
+      addMessage({ 
+        content: `To ${commandId.replace(/_/g, ' ')}, please select a candidate first.`, 
+        sender: 'assistant' 
+      });
+      setShowCandidateSearch(true);
+    } else if (entityTypeRequired === 'company') {
+      addMessage({ 
+        content: `To ${commandId.replace(/_/g, ' ')}, please select a company first.`, 
+        sender: 'assistant' 
+      });
+      setShowCompanySearch(true);
+    } else if (entityTypeRequired === 'either') {
+      addMessage({ 
+        content: `To ${commandId.replace(/_/g, ' ')}, please select a candidate or a company. Starting with candidate search.`, 
+        sender: 'assistant' 
+      });
+      setShowCandidateSearch(true);
+    }
+  };
+
+  // Input handlers
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !isProcessing) {
       e.preventDefault();
       handleSendMessage();
     }
   };
 
-  // Handle command click - improved to directly generate content when an entity is selected
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleCommandClick = (commandId: string) => {
-    // If no entity is selected for commands that need one, show an alert message
-    const needsEntity = ['email', 'suggestions'].includes(commandId);
-    
-    if (needsEntity && !selectedEntity) {
-      // Add an assistant message explaining the need to select an entity first
-      const helpMessage: Message = {
-        id: Date.now().toString(),
-        content: `Please select a ${commandId === 'email' ? 'candidate or company' : 'candidate or company'} first to generate ${commandId}.`,
-        sender: 'assistant',
-        timestamp: new Date(),
-      };
-      
-      setMessages(prev => [...prev, helpMessage]);
-      return;
-    }
-    
-    switch (commandId) {
-      case 'search':
-        setShowCommandMenu(true);
-        setInitialCommand(null);
-        break;
-        
-      case 'email':
-        if (selectedEntity) {
-          generateTemplateForEntity('email');
-        }
-        break;
-        
-      case 'interview':
-        if (selectedEntity && 'firstName' in selectedEntity) {
-          // For candidates, generate directly based on their position
-          const candidate = selectedEntity as Candidate;
-          const loadingMessage: Message = {
-            id: Date.now().toString(),
-            content: '',
-            sender: 'assistant',
-            timestamp: new Date(),
-            isLoading: true,
-          };
-          
-          setMessages(prev => [...prev, loadingMessage]);
-          
-          generatePositionInterviewQuestions(
-            candidate.position || 'candidate',
-            undefined,
-            `These questions are for ${candidate.firstName} ${candidate.lastName}`
-          ).then(response => {
-            setMessages(prev => {
-              const updatedMessages = [...prev];
-              const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-              
-              if (loadingIndex !== -1) {
-                updatedMessages[loadingIndex] = {
-                  id: Date.now().toString(),
-                  content: response,
-                  sender: 'assistant',
-                  timestamp: new Date(),
-                  entityReference: {
-                    type: 'candidate',
-                    id: candidate.id,
-                    name: `${candidate.firstName} ${candidate.lastName}`,
-                  },
-                };
-              }
-              
-              return updatedMessages;
-            });
-          }).catch(error => {
-            console.error('Error generating interview questions:', error);
-            setMessages(prev => {
-              const updatedMessages = [...prev];
-              const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-              
-              if (loadingIndex !== -1) {
-                updatedMessages[loadingIndex] = {
-                  id: Date.now().toString(),
-                  content: "Sorry, I couldn't generate interview questions. Please try again later.",
-                  sender: 'assistant',
-                  timestamp: new Date(),
-                };
-              }
-              
-              return updatedMessages;
-            });
-          });
-        } else if (selectedEntity) {
-          // For companies
-          const company = selectedEntity as Company;
-          const loadingMessage: Message = {
-            id: Date.now().toString(),
-            content: '',
-            sender: 'assistant',
-            timestamp: new Date(),
-            isLoading: true,
-          };
-          
-          setMessages(prev => [...prev, loadingMessage]);
-          
-          generatePositionInterviewQuestions(
-            "candidate", // Default position
-            company.name,
-            `These questions are for candidates applying to ${company.name}`
-          ).then(response => {
-            setMessages(prev => {
-              const updatedMessages = [...prev];
-              const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-              
-              if (loadingIndex !== -1) {
-                updatedMessages[loadingIndex] = {
-                  id: Date.now().toString(),
-                  content: response,
-                  sender: 'assistant',
-                  timestamp: new Date(),
-                  entityReference: {
-                    type: 'company',
-                    id: company.id,
-                    name: company.name,
-                  },
-                };
-              }
-              
-              return updatedMessages;
-            });
-          }).catch(error => {
-            console.error('Error generating interview questions:', error);
-            setMessages(prev => {
-              const updatedMessages = [...prev];
-              const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-              
-              if (loadingIndex !== -1) {
-                updatedMessages[loadingIndex] = {
-                  id: Date.now().toString(),
-                  content: "Sorry, I couldn't generate interview questions. Please try again later.",
-                  sender: 'assistant',
-                  timestamp: new Date(),
-                };
-              }
-              
-              return updatedMessages;
-            });
-          });
-        } else {
-          // No entity selected - ask user to select one
-          const helpMessage: Message = {
-            id: Date.now().toString(),
-            content: `Please select a candidate or company first to generate interview questions.`,
-            sender: 'assistant',
-            timestamp: new Date(),
-          };
-          
-          setMessages(prev => [...prev, helpMessage]);
-        }
-        break;
-        
-      case 'job':
-        if (selectedEntity && !('firstName' in selectedEntity)) {
-          // For companies, generate directly
-          const company = selectedEntity as Company;
-          const loadingMessage: Message = {
-            id: Date.now().toString(),
-            content: '',
-            sender: 'assistant',
-            timestamp: new Date(),
-            isLoading: true,
-          };
-          
-          setMessages(prev => [...prev, loadingMessage]);
-          
-          generateJobDescription(
-            "position", // Default position
-            company.name,
-            company.industry
-          ).then(response => {
-            setMessages(prev => {
-              const updatedMessages = [...prev];
-              const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-              
-              if (loadingIndex !== -1) {
-                updatedMessages[loadingIndex] = {
-                  id: Date.now().toString(),
-                  content: response,
-                  sender: 'assistant',
-                  timestamp: new Date(),
-                  entityReference: {
-                    type: 'company',
-                    id: company.id,
-                    name: company.name,
-                  },
-                };
-              }
-              
-              return updatedMessages;
-            });
-          }).catch(error => {
-            console.error('Error generating job description:', error);
-            setMessages(prev => {
-              const updatedMessages = [...prev];
-              const loadingIndex = updatedMessages.findIndex(msg => msg.isLoading);
-              
-              if (loadingIndex !== -1) {
-                updatedMessages[loadingIndex] = {
-                  id: Date.now().toString(),
-                  content: "Sorry, I couldn't generate a job description. Please try again later.",
-                  sender: 'assistant',
-                  timestamp: new Date(),
-                };
-              }
-              
-              return updatedMessages;
-            });
-          });
-        } else {
-          // For candidates or no entity, show a message
-          const helpMessage: Message = {
-            id: Date.now().toString(),
-            content: `Please select a company to generate a job description.`,
-            sender: 'assistant',
-            timestamp: new Date(),
-          };
-          
-          setMessages(prev => [...prev, helpMessage]);
-        }
-        break;
-        
-      case 'suggestions':
-        if (selectedEntity) {
-          generateTemplateForEntity('suggestions');
-        }
-        break;
-    }
+  const handleSlashCommand = () => {
+    console.log("🔄 Slash command initiated");
+    setShowCommandMenu(true);
   };
 
   return (
-    <div className="h-full flex flex-col" style={{ 
-      backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A'
-    }}>
-      {/* API Key Settings Modal */}
-      <ApiKeySettingsModal 
-        isOpen={showApiKeySettings} 
-        onClose={() => setShowApiKeySettings(false)} 
-      />
-      
+    <div className="h-full flex flex-col" style={{ backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }}>
+      {/* API Key Modal */}
+      <ApiKeySettingsModal isOpen={showApiKeySettings} onClose={() => setShowApiKeySettings(false)} />
+
       {/* Command Menu */}
       <CommandMenu
         isOpen={showCommandMenu}
-        onClose={() => {
-          setShowCommandMenu(false);
-          if (templateType && selectedEntity) {
-            setTimeout(() => {
-              generateTemplateForEntity(templateType, selectedEntity);
-              setTemplateType(null);
-            }, 500);
-          }
-        }}
-        onSelectCandidate={handleSelectCandidate}
-        onSelectCompany={handleSelectCompany}
-        candidates={candidateData}
-        companies={companyData}
-        initialCommand={initialCommand}
+        onClose={() => setShowCommandMenu(false)}
+        onSelectCandidate={handleSelectCandidate} 
+        onSelectCompany={handleSelectCompany}   
+        onInitiateEntitySelection={handleInitiateEntitySelectionForCommand}
         selectedEntity={selectedEntity}
       />
 
-      {/* Simple Search Menus */}
+      {/* Search Modals */}
       <SimpleSearchMenu
         isOpen={showCandidateSearch}
         type="candidates"
-        items={candidateData}
-        onSelect={(candidate) => {
-          setShowCandidateSearch(false);
-          handleSelectCandidate(candidate as Candidate);
+        items={candidates}
+        isLoading={isLoadingCandidates}
+        error={candidatesError}
+        onSelect={(item) => { 
+          if ('firstName' in item) handleSelectCandidate(item as Candidate); 
         }}
-        onClose={() => setShowCandidateSearch(false)}
+        onClose={() => {
+          setShowCandidateSearch(false);
+          if(commandThatNeedsEntity && !selectedEntity) {
+            addMessage({ 
+              content: `Action "${commandThatNeedsEntity.replace(/_/g, ' ')}" cancelled as no candidate was selected.`, 
+              sender: 'assistant' 
+            });
+            setCommandThatNeedsEntity(null);
+          }
+        }}
+        title="Select a Candidate to Set Context"
       />
-
+      
       <SimpleSearchMenu
         isOpen={showCompanySearch}
         type="companies"
-        items={companyData}
-        onSelect={(company) => {
-          setShowCompanySearch(false);
-          handleSelectCompany(company as Company);
+        items={companies}
+        isLoading={isLoadingCompanies}
+        error={companiesError}
+        onSelect={(item) => { 
+          if (!('firstName' in item)) handleSelectCompany(item as Company); 
         }}
-        onClose={() => setShowCompanySearch(false)}
+        onClose={() => {
+          setShowCompanySearch(false);
+          if(commandThatNeedsEntity && !selectedEntity) {
+            addMessage({ 
+              content: `Action "${commandThatNeedsEntity.replace(/_/g, ' ')}" cancelled as no company was selected.`, 
+              sender: 'assistant' 
+            });
+            setCommandThatNeedsEntity(null);
+          }
+        }}
+        title="Select a Company to Set Context"
       />
 
-      {/* Main Container */}
+      {/* Main Chat Interface */}
       <div className="flex flex-col h-full w-full overflow-hidden" style={{ backgroundColor: colors.background }}>
         {/* Header */}
-        <div className="px-6 py-4 border-b flex items-center justify-between" style={{
+        <div className="px-6 py-4 border-b flex items-center justify-between sticky top-0 z-20" style={{
           backgroundColor: theme === 'light' ? '#FFFFFF' : '#1E293B',
           borderColor: theme === 'light' ? '#E2E8F0' : '#334155',
-          boxShadow: theme === 'light' 
-            ? '0 1px 3px rgba(0, 0, 0, 0.05)' 
-            : '0 1px 3px rgba(0, 0, 0, 0.2)'
+          boxShadow: theme === 'light' ? '0 1px 3px rgba(0, 0, 0, 0.05)' : '0 1px 3px rgba(0, 0, 0, 0.2)'
         }}>
           <div className="flex items-center">
             <div className="mr-3 h-10 w-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: colors.primary }}>
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-              </svg>
+              <FiCpu className="w-6 h-6 text-white" />
             </div>
-            <h1 className="text-2xl font-bold" style={{ color: colors.text }}>
-              AI Assistant
-            </h1>
+            <h1 className="text-2xl font-bold" style={{ color: colors.text }}>AI Assistant</h1>
           </div>
-
-          {/* Entity card or settings button */}
           {selectedEntity ? (
-            <ModernEntityCard entity={selectedEntity} onClear={() => setSelectedEntity(null)} />
+            <ModernEntityCard 
+              entity={selectedEntity} 
+              onClear={() => {
+                clearSelectedEntity();
+                addMessage({
+                  content: "Context cleared. You can now ask general questions or select a new entity.", 
+                  sender: 'assistant'
+                });
+              }} 
+            />
           ) : (
-            <button
+            <Button
+              variant="outline"
               onClick={() => setShowApiKeySettings(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border transition-colors"
-              style={{
-                backgroundColor: `${colors.primary}10`,
-                color: colors.primary,
-                borderColor: `${colors.primary}30`,
-              }}
+              className="text-sm"
+              leftIcon={<FiSettings />}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-              </svg>
-              <span>API Settings</span>
-            </button>
+              API Settings
+            </Button>
           )}
         </div>
 
-        {/* Main Content Area */}
+        {/* Chat Area */}
         <div className="flex flex-1 overflow-hidden p-4">
-          {/* Chat container */}
-          <div className="flex flex-col flex-1 max-h-full rounded-xl overflow-hidden border"
-            style={{
-              backgroundColor: colors.card,
-              borderColor: colors.border,
-            }}
-          >
-            {/* Messages Area */}
+          <div className="flex flex-col flex-1 max-h-full rounded-xl overflow-hidden border" style={{ backgroundColor: colors.card, borderColor: colors.border }}>
+            {/* Messages */}
             <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
-              {messages.map((message, index) => (
-                <motion.div
-                  key={message.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <ModernAIMessage
-                    id={message.id}
-                    content={message.content}
-                    sender={message.sender}
-                    timestamp={message.timestamp}
-                    isLoading={message.isLoading}
-                    entityReference={message.entityReference}
-                    isLast={index === messages.length - 1}
-                  />
-                </motion.div>
-              ))}
+              <AnimatePresence initial={false}>
+                {messages.map((message, index) => (
+                  <motion.div
+                    key={message.id}
+                    layout
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.15 } }}
+                    transition={{ type: "spring", stiffness: 300, damping: 25, delay: index * 0.05 }}
+                  >
+                    <ModernAIMessage
+                      id={message.id}
+                      content={message.content}
+                      sender={message.sender}
+                      timestamp={message.timestamp}
+                      isLoading={message.isLoading}
+                      entityReference={message.entityReference}
+                      isLast={index === messages.length - 1}
+                    />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
               <div ref={messagesEndRef} />
             </div>
-
+            
             {/* Input Area */}
             <div className="p-4 border-t" style={{ borderColor: colors.border }}>
               <ModernAIInput
                 value={input}
-                onChange={handleInputChange}
+                onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                onSend={handleSendMessage}
-                onSlashCommand={() => {
-                  setShowCommandMenu(true);
-                }}
+                onSend={() => handleSendMessage()}
+                onSlashCommand={handleSlashCommand}
                 placeholder={selectedEntity
-                  ? `Ask about ${('firstName' in selectedEntity)
-                    ? selectedEntity.firstName + ' ' + selectedEntity.lastName
-                    : selectedEntity.name}...`
-                  : "Type / for commands or start typing..."}
-                disabled={isLoading || isGeneratingTemplate}
-                entityName={selectedEntity
-                  ? 'firstName' in selectedEntity
-                    ? `${selectedEntity.firstName} ${selectedEntity.lastName}`
-                    : selectedEntity.name
-                  : null}
-                entityType={selectedEntity
-                  ? 'firstName' in selectedEntity ? 'candidate' : 'company'
-                  : null}
+                  ? `Ask about ${'firstName' in selectedEntity ? `${selectedEntity.firstName} ${selectedEntity.lastName}` : selectedEntity.name}... or type /`
+                  : "Type / for commands or ask a general question..."}
+                disabled={isProcessing}
+                entityName={selectedEntity ? ('firstName' in selectedEntity ? `${selectedEntity.firstName} ${selectedEntity.lastName}` : selectedEntity.name) : null}
+                entityType={selectedEntity ? ('firstName' in selectedEntity ? 'candidate' : 'company') : null}
               />
             </div>
           </div>

@@ -1,87 +1,95 @@
 // src/lib/openai-service.ts
+import axios from 'axios'; // Using axios directly for simplicity. Adapt to your apiService if preferred.
 import { Candidate, Company, Job } from '@/types';
+import {
+  CvAnalysisRequest, CvAnalysisResponse,
+  JobMatchRequest, JobMatch, // Renamed JobMatchResponseItem to JobMatch for frontend
+  EmailGenerationRequest, EmailGenerationResponse, EmailGenerationContext,
+  InterviewQuestionsRequest, InterviewQuestionItem,
+  JobDescriptionRequest, JobDescriptionResponse,
+  OpenAIMessage, // Keep this if used for direct OpenAI calls or for the backend chat wrapper
+  ChatCompletionRequest, ChatCompletionResponse
+} from '@/types'; // Assuming AI types are moved/added to src/types/index.ts
 
-// Get the OpenAI API key from environment variables
-// Add your key to .env.local as NEXT_PUBLIC_OPENAI_API_KEY=your-key-here
-// You can also pass the API key through sessionStorage for development
-const getOpenAIKey = () => {
+// Get the OpenAI API key from environment variables - This might become obsolete if backend handles the key
+const getOpenAIKey = (): string | undefined => {
   if (typeof window !== 'undefined') {
-    // Try to get from sessionStorage first (for development)
     const sessionKey = window.sessionStorage.getItem('OPENAI_API_KEY');
     if (sessionKey) return sessionKey;
   }
-  // Fall back to environment variable
   return process.env.NEXT_PUBLIC_OPENAI_API_KEY;
 };
 
-const OPENAI_API_KEY = getOpenAIKey();
-const API_URL = 'https://api.openai.com/v1/chat/completions';
-// Configure whether to use backend or direct OpenAI
-const USE_BACKEND_AI = process.env.NEXT_PUBLIC_USE_BACKEND_AI === 'true';
-// Don't use mock data by default - always prefer real OpenAI API
-const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true';
-// API base URL
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const OPENAI_API_KEY = getOpenAIKey(); // May not be needed if all calls go through your backend
+const OPENAI_DIRECT_API_URL = 'https://api.openai.com/v1/chat/completions'; // For direct calls if USE_BACKEND_AI is false
 
-// Store OpenAI API key in session storage for development
+const USE_BACKEND_AI = process.env.NEXT_PUBLIC_USE_BACKEND_AI === 'true';
+const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'false';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const AI_TOOLS_BASE_PATH = '/api/v1/ai-tools';
+
+
+// Helper function to make API calls to your backend
+async function backendApiCall<TRequest, TResponse>(endpoint: string, payload: TRequest): Promise<TResponse> {
+  try {
+    const response = await axios.post<TResponse>(`${API_BASE_URL}${AI_TOOLS_BASE_PATH}${endpoint}`, payload);
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error as any) && (error as any).response) {
+      console.error(`Error calling backend AI service ${endpoint}:`, (error as any).response.data);
+      throw new Error((error as any).response.data.detail || `Backend AI service error for ${endpoint}`);
+    } else {
+      console.error(`Network or other error for ${endpoint}:`, error);
+      throw new Error(`Failed to connect to AI service for ${endpoint}`);
+    }
+  }
+}
+
+
+// Store OpenAI API key in session storage for development (if still needed for direct OpenAI calls)
 export const setOpenAIKey = (apiKey: string) => {
   if (typeof window !== 'undefined') {
     window.sessionStorage.setItem('OPENAI_API_KEY', apiKey);
-    window.location.reload(); // Reload to apply the key
+    // Consider if reload is always desired or if state should update to reflect key change
+    window.location.reload();
   }
 };
 
-export interface OpenAIMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-// Interface for backend responses
-interface BackendResponse<T> {
-  success: boolean;
-  data: T;
-  error?: string;
-}
 
 /**
- * Generate chat completion using OpenAI API or backend service
+ * Generate chat completion using OpenAI API (direct or via backend)
+ * This function might need to be split or refactored.
+ * If USE_BACKEND_AI is true, it should call your backend's /chat-completion endpoint.
  */
 export async function generateChatCompletion(messages: OpenAIMessage[]): Promise<string> {
-  // Use mock data if flag is set
   if (USE_MOCK_DATA) {
-    console.log("Using mock data for OpenAI service");
-    return generateMockResponse(messages);
+    console.log("Using mock data for chat completion");
+    return generateMockResponse(messages); // Existing mock logic
   }
 
-  try {
-    // Decide whether to use backend or direct OpenAI
-    if (USE_BACKEND_AI) {
-      // Call backend service
-      const response = await fetch(`${API_BASE_URL}/api/v1/ai-tools/chat-completion`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ messages }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate response from backend');
-      }
-
-      const data = await response.json();
-      return data.content;
-    } else {
-      // Call OpenAI API directly
-      const response = await fetch(API_URL, {
+  if (USE_BACKEND_AI) {
+    const payload: ChatCompletionRequest = { messages };
+    try {
+      const response = await backendApiCall<ChatCompletionRequest, ChatCompletionResponse>('/chat-completion', payload);
+      return response.content;
+    } catch (error) {
+      console.error('Error generating chat completion from backend:', error);
+      return "I'm sorry, I'm having trouble connecting to the backend AI service.";
+    }
+  } else {
+    // Direct OpenAI call (existing logic)
+    if (!OPENAI_API_KEY) {
+      return "OpenAI API key is not configured. Please set it in the settings.";
+    }
+    try {
+      const response = await fetch(OPENAI_DIRECT_API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${OPENAI_API_KEY}`
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',  // Using a compact model for cost efficiency
+          model: 'gpt-4o-mini',
           messages,
           temperature: 0.7,
           max_tokens: 1000
@@ -90,255 +98,291 @@ export async function generateChatCompletion(messages: OpenAIMessage[]): Promise
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error?.message || 'Failed to generate response');
+        throw new Error(errorData.error?.message || 'Failed to generate response from OpenAI');
       }
-
       const data = await response.json();
       return data.choices[0].message.content.trim();
+    } catch (error) {
+      console.error('Error generating chat completion from OpenAI:', error);
+      return "I'm sorry, I'm having trouble connecting to the OpenAI service.";
     }
-  } catch (error) {
-    console.error('Error generating chat completion:', error);
-
-    // Return a fallback response in case of an error
-    return "I'm sorry, I'm having trouble connecting to my AI service at the moment. Please try again later.";
   }
 }
 
-/**
- * Generate a mock response for testing without API calls
- */
-function generateMockResponse(messages: OpenAIMessage[]): string {
-  // Extract the last user message to generate a mock response
-  const lastUserMessage = messages.findLast(msg => msg.role === 'user')?.content || '';
 
-  // Generate mock responses based on content
-  if (lastUserMessage.toLowerCase().includes('email')) {
-    return "Dear [Name],\n\nI hope this email finds you well. I am reaching out on behalf of Recruitment Plus regarding [purpose].\n\n[Personalized content here based on the recipient's needs and background.]\n\nI would be happy to schedule a call to discuss this further at your convenience.\n\nThank you for your time and consideration.";
-  } else if (lastUserMessage.toLowerCase().includes('interview question')) {
-    return "Here are 5 interview questions:\n\n1. Can you describe a challenging project you worked on and how you approached it?\n\n2. How do you prioritize tasks when working on multiple projects with competing deadlines?\n\n3. Give an example of a time when you had to adapt to a significant change at work\n\n4. What strategies do you use to collaborate effectively with team members who have different working styles?\n\n5. Where do you see yourself professionally in 3-5 years and what steps are you taking to get there?";
-  } else if (lastUserMessage.toLowerCase().includes('job description')) {
-    return "# Position Title\n\n## About the Company\nWe are a dynamic organization committed to excellence in [industry]. Our mission is to [company mission].\n\n## Role Overview\nWe are seeking a talented and motivated professional to join our team as a [Position]. The successful candidate will be responsible for [key responsibilities].\n\n## Key Responsibilities\n- [Responsibility 1]\n- [Responsibility 2]\n- [Responsibility 3]\n\n## Requirements\n- [Requirement 1]\n- [Requirement 2]\n- [Requirement 3]\n\n## Qualifications\n- [Qualification 1]\n- [Qualification 2]\n\n## Benefits\n- Competitive salary\n- Professional development opportunities\n- [Other benefits]";
-  } else if (lastUserMessage.toLowerCase().includes('suggestion')) {
-    return "Here are some suggestions:\n\n1. Consider expanding your network through industry-specific events\n2. Regularly update your skills through relevant certifications\n3. Develop a personalized outreach strategy\n4. Create customized follow-up sequences for different candidate types\n5. Implement a structured feedback collection process";
-  } else {
-    return "I'm here to help with your recruitment needs. I can assist with creating email templates, generating interview questions, writing job descriptions, or providing suggestions for working with candidates and companies.";
+// --- New functions calling your backend AI services ---
+
+export async function analyzeCv(cvText: string): Promise<CvAnalysisResponse> {
+  if (USE_MOCK_DATA) {
+    return {
+      skills: ["Mock Skill: Python", "Mock Skill: FastAPI"],
+      education: [{ institution: "Mock University", degree: "MS CS" }],
+      experience: [{ title: "Mock Developer", company: "Mock Inc.", duration: "2 years" }],
+      total_experience_years: 2,
+      summary: "This is a mock CV analysis summary."
+    };
   }
+  const payload: CvAnalysisRequest = { cv_text: cvText };
+  return backendApiCall<CvAnalysisRequest, CvAnalysisResponse>('/analyze-cv', payload);
 }
 
-/**
- * Function to generate email template for a candidate using backend or direct OpenAI
- */
+export async function matchJobs(cvAnalysis: CvAnalysisResponse, jobId?: number): Promise<JobMatch[]> {
+    if (USE_MOCK_DATA) {
+        return [{
+            job_id: 1, job_title: "Mock Job", company_name: "Mock Company", match_score: 85,
+            matching_skills: ["Python"], non_matching_skills: ["Java"],
+            match_explanation: "Good match based on Python.", improvement_suggestion: "Learn Java."
+        }];
+    }
+  const payload: JobMatchRequest = { cv_analysis: cvAnalysis, job_id: jobId };
+  return backendApiCall<JobMatchRequest, JobMatch[]>('/match-jobs', payload);
+}
+
+// --- Updated functions to call your backend ---
+
 export async function generateCandidateEmail(
-  candidate: Candidate, 
-  purpose: string, 
-  additionalContext?: string
+  candidate: Candidate,
+  purpose: string,
+  additionalContext?: string // You might want to structure this better or include in 'purpose'
 ): Promise<string> {
-  // Use mock data if flag is set
   if (USE_MOCK_DATA) {
     return generateMockResponse([
-      {
-        role: 'user',
-        content: `Generate an email to ${candidate.firstName} ${candidate.lastName} about ${purpose}`
-      }
+      { role: 'user', content: `Generate an email to ${candidate.firstName} about ${purpose}` }
     ]);
   }
 
-  try {
-    if (USE_BACKEND_AI) {
-      // Use backend service for email generation
-      const response = await fetch(`${API_BASE_URL}/api/v1/ai-tools/generate-email`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          template_id: 'cv_acknowledgment', // Default template
-          context: {
-            candidate_name: `${candidate.firstName} ${candidate.lastName}`,
-            candidate_id: candidate.id,
-            email: candidate.email,
-            job_title: candidate.position,
-            status: candidate.status,
-            additional_context: additionalContext || '',
-            purpose: purpose
-          }
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate email from backend');
-      }
-
-      const data = await response.json();
-      return data.body;
-    } else {
-      // Use direct OpenAI integration
-      const fullName = `${candidate.firstName} ${candidate.lastName}`;
-      const messages: OpenAIMessage[] = [
-        {
-          role: 'system',
-          content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for candidates. Be friendly, professional, and concise. DO NOT include any signature/footer or "Best regards" section at the end - the application will add this automatically.`
-        },
-        {
-          role: 'user',
-          content: `Generate an email to ${fullName} (${candidate.email}) about ${purpose}. 
-            Current status: ${candidate.status}
-            Position applying for: ${candidate.position}
-            Additional context: ${additionalContext || 'N/A'}`
-        }
-      ];
-
-      return generateChatCompletion(messages);
+  if (USE_BACKEND_AI) {
+    const context: EmailGenerationContext = {
+      candidate_id: candidate.id,
+      candidate_name: `${candidate.firstName} ${candidate.lastName}`,
+      email: candidate.email,
+      job_title: candidate.position,
+      status: candidate.status,
+      // You might want a more structured way to pass additionalContext if it's complex
+      // For now, let's assume it's part of the 'purpose' or a simple string field.
+      additional_context: additionalContext || '',
+      purpose: purpose, // The AI service will use this to pick/generate template
+      // consultant_name: 'Your Name' // Or get from logged-in user
+    };
+    // The backend's /generate-email expects template_id and context.
+    // We need to decide how 'purpose' maps to a 'template_id' or if the backend handles this.
+    // For now, let's assume a generic template_id or that the backend infers it from purpose.
+    const payload: EmailGenerationRequest = {
+      template_id: `candidate_${purpose.toLowerCase().replace(/\s+/g, '_')}`, // e.g., candidate_interview_invitation
+      context,
+    };
+    try {
+      const response = await backendApiCall<EmailGenerationRequest, EmailGenerationResponse>('/generate-email', payload);
+      return response.body; // Backend now returns subject and body.
+    } catch (error) {
+      console.error('Error generating candidate email from backend:', error);
+      return "Error generating email. Please try again.";
     }
-  } catch (error) {
-    console.error('Error generating candidate email:', error);
-    return "Dear Candidate,\n\nThank you for your interest in our company. We appreciate you taking the time to apply.\n\nWe will review your application and get back to you soon.\n\nBest regards,";
+  } else {
+    // Fallback to direct OpenAI call (original logic)
+    // This part needs OPENAI_API_KEY and direct OpenAI call setup
+     if (!OPENAI_API_KEY) return "OpenAI API Key not configured for direct email generation.";
+    const fullName = `${candidate.firstName} ${candidate.lastName}`;
+    const messages: OpenAIMessage[] = [
+      { role: 'system', content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for candidates. Be friendly, professional, and concise. DO NOT include any signature/footer or "Best regards" section at the end - the application will add this automatically.` },
+      { role: 'user', content: `Generate an email to ${fullName} (${candidate.email}) about ${purpose}. Current status: ${candidate.status}. Position applying for: ${candidate.position}. Additional context: ${additionalContext || 'N/A'}` }
+    ];
+    return generateChatCompletion(messages); // This generateChatCompletion also needs to respect USE_BACKEND_AI
   }
 }
 
-/**
- * Function to generate email template for a company using backend or direct OpenAI
- */
 export async function generateCompanyEmail(
   company: Company,
   purpose: string,
   additionalContext?: string
 ): Promise<string> {
-  // Use mock data if flag is set
   if (USE_MOCK_DATA) {
-    return generateMockResponse([
-      {
-        role: 'user',
-        content: `Generate an email to ${company.contactPerson} at ${company.name} about ${purpose}`
-      }
-    ]);
+    return generateMockResponse([{ role: 'user', content: `Generate an email to ${company.name} about ${purpose}` }]);
   }
 
-  try {
-    if (USE_BACKEND_AI) {
-      // Use backend service for email generation
-      const response = await fetch(`${API_BASE_URL}/api/v1/ai-tools/generate-email`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          template_id: 'company_introduction', // Default template for companies
-          context: {
-            company_name: company.name,
-            contact_person: company.contactPerson,
-            contact_email: company.contactEmail,
-            industry: company.industry,
-            open_positions: company.openPositions,
-            additional_context: additionalContext || '',
-            purpose: purpose
-          }
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate email from backend');
-      }
-
-      const data = await response.json();
-      return data.body;
-    } else {
-      // Use direct OpenAI integration
-      const messages: OpenAIMessage[] = [
-        {
-          role: 'system',
-          content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for companies. Be formal, professional, and concise. DO NOT include any signature/footer or "Best regards" section at the end - the application will add this automatically.`
-        },
-        {
-          role: 'user',
-          content: `Generate an email to ${company.contactPerson} at ${company.name} (${company.contactEmail}) about ${purpose}.
-            Industry: ${company.industry}
-            Open Positions: ${company.openPositions}
-            Additional context: ${additionalContext || 'N/A'}`
-        }
-      ];
-
-      return generateChatCompletion(messages);
+  if (USE_BACKEND_AI) {
+    const context: EmailGenerationContext = {
+      company_name: company.name,
+      contact_person: company.contactPerson,
+      contact_email: company.contactEmail,
+      industry: company.industry,
+      open_positions: company.openPositions,
+      additional_context: additionalContext || '',
+      purpose: purpose,
+    };
+    const payload: EmailGenerationRequest = {
+      template_id: `company_${purpose.toLowerCase().replace(/\s+/g, '_')}`, // e.g., company_introduction
+      context,
+    };
+     try {
+      const response = await backendApiCall<EmailGenerationRequest, EmailGenerationResponse>('/generate-email', payload);
+      return response.body;
+    } catch (error) {
+      console.error('Error generating company email from backend:', error);
+      return "Error generating email. Please try again.";
     }
-  } catch (error) {
-    console.error('Error generating company email:', error);
-    return "Dear Hiring Manager,\n\nI hope this email finds you well. I'm reaching out from our recruitment agency to discuss potential collaboration.\n\nWe specialize in finding top talent for companies in your industry and would love to discuss how we can help with your hiring needs.\n\nBest regards,";
+  } else {
+    if (!OPENAI_API_KEY) return "OpenAI API Key not configured for direct email generation.";
+    const messages: OpenAIMessage[] = [
+      { role: 'system', content: `You are an AI assistant helping a recruitment agency. Generate professional email templates for companies. Be formal, professional, and concise. DO NOT include any signature/footer or "Best regards" section at the end - the application will add this automatically.` },
+      { role: 'user', content: `Generate an email to ${company.contactPerson} at ${company.name} (${company.contactEmail}) about ${purpose}. Industry: ${company.industry}. Open Positions: ${company.openPositions}. Additional context: ${additionalContext || 'N/A'}` }
+    ];
+    return generateChatCompletion(messages);
   }
 }
 
-/**
- * Generate interview questions based on job description using backend or direct OpenAI
- */
-export async function generateInterviewQuestions(job: Job): Promise<string> {
-  // Use mock data if flag is set
+export async function generateJobInterviewQuestions(job: Job): Promise<string> { // Renamed to avoid conflict
   if (USE_MOCK_DATA) {
-    return generateMockResponse([
-      {
-        role: 'user',
-        content: `Generate interview questions for a ${job.title} position`
-      }
-    ]);
+    return generateMockResponse([{ role: 'user', content: `Generate interview questions for ${job.title}` }]);
   }
 
-  try {
-    if (USE_BACKEND_AI) {
-      // Use backend service for interview questions
-      const response = await fetch(`${API_BASE_URL}/api/v1/ai-tools/generate-interview-questions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          job_description: {
-            title: job.title,
-            company_name: job.companyName,
-            description: job.description,
-            requirements: job.requirements,
-          }
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate interview questions from backend');
+  if (USE_BACKEND_AI) {
+    const payload: InterviewQuestionsRequest = {
+      job_description: {
+        title: job.title,
+        company_name: job.companyName,
+        description: job.description,
+        requirements: job.requirements,
+        // skills: job.skills (if available on Job type)
       }
-
-      const data = await response.json();
-      // Format questions in a readable way
-      return formatInterviewQuestions(data);
-    } else {
-      // Use direct OpenAI integration
-      const messages: OpenAIMessage[] = [
-        {
-          role: 'system',
-          content: `You are an AI assistant helping a recruitment agency. Generate relevant interview questions based on job descriptions. Focus on both technical skills and soft skills.`
-        },
-        {
-          role: 'user',
-          content: `Generate 5-7 interview questions for a ${job.title} position at ${job.companyName}.
-            Job description: ${job.description}
-            Requirements: ${job.requirements.join(', ')}
-            Location: ${job.location}
-            ${job.salaryRange ? `Salary Range: ${job.salaryRange}` : ''}`
-        }
-      ];
-
-      return generateChatCompletion(messages);
+      // candidate_info can be omitted or passed if available
+    };
+    try {
+      const questionsArray = await backendApiCall<InterviewQuestionsRequest, InterviewQuestionItem[]>('/generate-interview-questions', payload);
+      return formatInterviewQuestions(questionsArray); // Use existing formatter
+    } catch (error) {
+      console.error('Error generating interview questions from backend:', error);
+      return "Error generating interview questions.";
     }
-  } catch (error) {
-    console.error('Error generating interview questions:', error);
-    return "1. Can you tell me about your experience in this field?\n2. How do you handle challenging situations at work?\n3. What are your strengths and weaknesses?\n4. Why are you interested in this position?\n5. Where do you see yourself in 5 years?";
+  } else {
+     if (!OPENAI_API_KEY) return "OpenAI API Key not configured for direct question generation.";
+    const messages: OpenAIMessage[] = [
+        { role: 'system', content: `You are an AI assistant helping a recruitment agency. Generate relevant interview questions based on job descriptions. Focus on both technical skills and soft skills.`},
+        { role: 'user', content: `Generate 5-7 interview questions for a ${job.title} position at ${job.companyName}. Job description: ${job.description}. Requirements: ${job.requirements.join(', ')}. Location: ${job.location}${job.salaryRange ? `. Salary Range: ${job.salaryRange}` : ''}`}
+    ];
+    return generateChatCompletion(messages);
   }
 }
 
-/**
- * Format interview questions from backend into readable text
- */
-function formatInterviewQuestions(questions: any[]): string {
+export async function generatePositionInterviewQuestions(
+  position: string,
+  companyName?: string,
+  additionalContext?: string
+): Promise<string> {
+  if (USE_MOCK_DATA) {
+    return generateMockResponse([{ role: 'user', content: `Generate interview questions for ${position}` }]);
+  }
+
+  if (USE_BACKEND_AI) {
+     const payload: InterviewQuestionsRequest = {
+      job_description: {
+        title: position,
+        company_name: companyName || 'the company',
+        description: additionalContext || `A ${position} position`,
+      }
+    };
+    try {
+      const questionsArray = await backendApiCall<InterviewQuestionsRequest, InterviewQuestionItem[]>('/generate-interview-questions', payload);
+      return formatInterviewQuestions(questionsArray);
+    } catch (error) {
+      console.error('Error generating position interview questions from backend:', error);
+      return "Error generating interview questions.";
+    }
+  } else {
+     if (!OPENAI_API_KEY) return "OpenAI API Key not configured for direct question generation.";
+    const messages: OpenAIMessage[] = [
+        { role: 'system', content: `You are an AI assistant helping a recruitment agency. Generate relevant interview questions for specific positions. Focus on both technical skills and soft skills.`},
+        { role: 'user', content: `Generate 5-7 interview questions for a ${position} position${companyName ? ` at ${companyName}` : ''}.${additionalContext ? ` Additional context: ${additionalContext}` : ''}`}
+    ];
+    return generateChatCompletion(messages);
+  }
+}
+
+export async function generateJobDescriptionService( // Renamed to avoid conflict
+  position: string,
+  companyName: string,
+  industry?: string,
+  requiredSkills?: string[] // Changed from additionalContext to match backend
+): Promise<string> {
+  if (USE_MOCK_DATA) {
+    return generateMockResponse([{ role: 'user', content: `Generate job description for ${position} at ${companyName}` }]);
+  }
+
+  if (USE_BACKEND_AI) {
+    const payload: JobDescriptionRequest = {
+      position,
+      company_name: companyName,
+      industry: industry || undefined,
+      required_skills: requiredSkills || undefined
+    };
+    try {
+      const response = await backendApiCall<JobDescriptionRequest, JobDescriptionResponse>('/generate-job-description', payload);
+      return response.full_text; // Backend returns a structured object with full_text
+    } catch (error) {
+      console.error('Error generating job description from backend:', error);
+      return "Error generating job description.";
+    }
+  } else {
+     if (!OPENAI_API_KEY) return "OpenAI API Key not configured for direct JD generation.";
+    const additionalContext = requiredSkills ? `Required skills: ${requiredSkills.join(', ')}` : '';
+    const messages: OpenAIMessage[] = [
+        { role: 'system', content: `You are an AI assistant helping a recruitment agency. Generate comprehensive and attractive job descriptions that will appeal to qualified candidates.`},
+        { role: 'user', content: `Generate a job description for a ${position} position at ${companyName}${industry ? ` in the ${industry} industry` : ''}. Include sections for: Company overview, Role responsibilities, Required qualifications, Preferred qualifications, Benefits and perks. ${additionalContext ? `Additional context: ${additionalContext}` : ''}`}
+    ];
+    return generateChatCompletion(messages);
+  }
+}
+
+
+// Candidate Feedback and General Query largely remain calls to generateChatCompletion
+// but they too can be routed via backend if you create specific endpoints for them.
+// For now, let's assume they might still use direct OpenAI or a generic backend chat endpoint.
+
+export async function generateCandidateFeedback(
+  candidate: Candidate,
+  interviewNotes?: string
+): Promise<string> {
+  const fullName = `${candidate.firstName} ${candidate.lastName}`;
+  if (USE_MOCK_DATA) {
+    return `Mock feedback for ${fullName}. Notes: ${interviewNotes || 'N/A'}`;
+  }
+  // If using backend, this would ideally be a specific endpoint.
+  // For now, it uses the generic chat completion, which needs context.
+  const messages: OpenAIMessage[] = [
+    { role: 'system', content: `You are an AI assistant helping a recruitment agency. Generate objective and constructive feedback for candidates after interviews.` },
+    { role: 'user', content: `Generate feedback for ${fullName} who applied for a ${candidate.position} position. Current status: ${candidate.status}. ${interviewNotes ? `Interview notes: ${interviewNotes}` : 'No specific interview notes provided.'}` }
+  ];
+  return generateChatCompletion(messages); // This will use USE_BACKEND_AI logic within generateChatCompletion
+}
+
+export async function processGeneralQuery(query: string, context?: string): Promise<string> {
+  if (USE_MOCK_DATA) {
+    return `Mock response for query: ${query}. Context: ${context || 'N/A'}`;
+  }
+   // Uses the generic chat completion.
+  const messages: OpenAIMessage[] = [
+    { role: 'system', content: `You are an AI assistant helping a recruitment agency. Provide helpful, concise, and professional responses to queries about recruitment, job searching, and career development.` },
+    { role: 'user', content: `${query}${context ? `\nContext: ${context}` : ''}` }
+  ];
+  return generateChatCompletion(messages); // This will use USE_BACKEND_AI logic within generateChatCompletion
+}
+
+
+// --- Utility functions (keep as is or adapt) ---
+function generateMockResponse(messages: OpenAIMessage[]): string {
+  const lastUserMessage = messages.findLast(msg => msg.role === 'user')?.content || '';
+  if (lastUserMessage.toLowerCase().includes('email')) {
+    return "Dear [Name],\n\nThis is a mock email response.\n\nBest regards.";
+  }
+  // Add more mock responses as needed
+  return "This is a generic mock response from the AI assistant.";
+}
+
+function formatInterviewQuestions(questions: InterviewQuestionItem[]): string {
+  if (!questions || !Array.isArray(questions)) {
+    return "Could not format interview questions: Invalid data.";
+  }
   let formattedText = "# Interview Questions\n\n";
-  
   questions.forEach((q, index) => {
     formattedText += `## Question ${index + 1}: ${q.question}\n\n`;
     if (q.purpose) {
@@ -348,278 +392,7 @@ function formatInterviewQuestions(questions: any[]): string {
       formattedText += `**What to look for:** ${q.evaluation_guidance}\n\n`;
     }
   });
-  
   return formattedText;
 }
 
-/**
- * Generate interview questions for a specific position
- */
-export async function generatePositionInterviewQuestions(
-  position: string,
-  companyName?: string,
-  additionalContext?: string
-): Promise<string> {
-  // Use mock data if flag is set
-  if (USE_MOCK_DATA) {
-    return generateMockResponse([
-      {
-        role: 'user',
-        content: `Generate interview questions for a ${position} position${companyName ? ` at ${companyName}` : ''}`
-      }
-    ]);
-  }
-
-  try {
-    if (USE_BACKEND_AI) {
-      // Use backend service for interview questions
-      const response = await fetch(`${API_BASE_URL}/api/v1/ai-tools/generate-interview-questions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          job_description: {
-            title: position,
-            company_name: companyName || 'the company',
-            description: additionalContext || `A ${position} position`,
-          }
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate interview questions from backend');
-      }
-
-      const data = await response.json();
-      // Format questions in a readable way
-      return formatInterviewQuestions(data);
-    } else {
-      // Use direct OpenAI integration
-      const messages: OpenAIMessage[] = [
-        {
-          role: 'system',
-          content: `You are an AI assistant helping a recruitment agency. Generate relevant interview questions for specific positions. Focus on both technical skills and soft skills.`
-        },
-        {
-          role: 'user',
-          content: `Generate 5-7 interview questions for a ${position} position${companyName ? ` at ${companyName}` : ''}.
-            ${additionalContext ? `Additional context: ${additionalContext}` : ''}`
-        }
-      ];
-
-      return generateChatCompletion(messages);
-    }
-  } catch (error) {
-    console.error('Error generating position interview questions:', error);
-    return "1. Can you tell me about your experience in this field?\n2. How do you handle challenging situations at work?\n3. What are your strengths and weaknesses?\n4. Why are you interested in this position?\n5. Where do you see yourself in 5 years?";
-  }
-}
-
-/**
- * Generate job description
- */
-export async function generateJobDescription(
-  position: string,
-  companyName: string,
-  industry?: string,
-  additionalContext?: string
-): Promise<string> {
-  // Use mock data if flag is set
-  if (USE_MOCK_DATA) {
-    return generateMockResponse([
-      {
-        role: 'user',
-        content: `Generate a job description for a ${position} position at ${companyName}`
-      }
-    ]);
-  }
-
-  try {
-    if (USE_BACKEND_AI) {
-      // Use backend service for job description
-      const response = await fetch(`${API_BASE_URL}/api/v1/ai-tools/generate-job-description`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          position,
-          company_name: companyName,
-          industry: industry || null,
-          required_skills: additionalContext ? additionalContext.split(',').map(skill => skill.trim()) : null
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to generate job description from backend');
-      }
-
-      const data = await response.json();
-      // Return the full text version for display
-      return data.full_text || formatJobDescription(data);
-    } else {
-      // Use direct OpenAI integration
-      const messages: OpenAIMessage[] = [
-        {
-          role: 'system',
-          content: `You are an AI assistant helping a recruitment agency. Generate comprehensive and attractive job descriptions that will appeal to qualified candidates.`
-        },
-        {
-          role: 'user',
-          content: `Generate a job description for a ${position} position at ${companyName}${industry ? ` in the ${industry} industry` : ''}.
-            Include sections for:
-            - Company overview
-            - Role responsibilities
-            - Required qualifications
-            - Preferred qualifications
-            - Benefits and perks
-            ${additionalContext ? `Additional context: ${additionalContext}` : ''}`
-        }
-      ];
-
-      return generateChatCompletion(messages);
-    }
-  } catch (error) {
-    console.error('Error generating job description:', error);
-    return `# ${position} at ${companyName}\n\n## About the Company\n\n## Job Description\n\n## Requirements\n\n## Benefits`;
-  }
-}
-
-/**
- * Format job description from structured data into readable text
- */
-function formatJobDescription(data: any): string {
-  let description = `# ${data.title}\n\n`;
-  
-  description += `## About ${data.company_overview ? 'Us' : 'the Company'}\n\n`;
-  description += `${data.company_overview || 'We are a leading company in our industry.'}\n\n`;
-  
-  description += `## Role Overview\n\n`;
-  description += `${data.role_summary || `We are seeking a talented ${data.title} to join our team.`}\n\n`;
-  
-  description += `## Key Responsibilities\n\n`;
-  if (data.key_responsibilities && data.key_responsibilities.length > 0) {
-    data.key_responsibilities.forEach((resp: string) => {
-      description += `- ${resp}\n`;
-    });
-  } else {
-    description += `- Responsibilities to be determined\n`;
-  }
-  description += '\n';
-  
-  description += `## Required Qualifications\n\n`;
-  if (data.required_qualifications && data.required_qualifications.length > 0) {
-    data.required_qualifications.forEach((qual: string) => {
-      description += `- ${qual}\n`;
-    });
-  } else {
-    description += `- Qualifications to be determined\n`;
-  }
-  description += '\n';
-  
-  if (data.preferred_qualifications && data.preferred_qualifications.length > 0) {
-    description += `## Preferred Qualifications\n\n`;
-    data.preferred_qualifications.forEach((qual: string) => {
-      description += `- ${qual}\n`;
-    });
-    description += '\n';
-  }
-  
-  if (data.required_skills && data.required_skills.length > 0) {
-    description += `## Required Skills\n\n`;
-    data.required_skills.forEach((skill: string) => {
-      description += `- ${skill}\n`;
-    });
-    description += '\n';
-  }
-  
-  if (data.benefits && data.benefits.length > 0) {
-    description += `## Benefits & Perks\n\n`;
-    data.benefits.forEach((benefit: string) => {
-      description += `- ${benefit}\n`;
-    });
-    description += '\n';
-  }
-  
-  if (data.application_process) {
-    description += `## How to Apply\n\n`;
-    description += `${data.application_process}\n\n`;
-  }
-  
-  return description;
-}
-
-/**
- * Generate candidate feedback
- */
-export async function generateCandidateFeedback(
-  candidate: Candidate,
-  interviewNotes?: string
-): Promise<string> {
-  // Use mock data if flag is set
-  if (USE_MOCK_DATA) {
-    return generateMockResponse([
-      {
-        role: 'user',
-        content: `Generate feedback for ${candidate.firstName} ${candidate.lastName}`
-      }
-    ]);
-  }
-
-  try {
-    const fullName = `${candidate.firstName} ${candidate.lastName}`;
-    const messages: OpenAIMessage[] = [
-      {
-        role: 'system',
-        content: `You are an AI assistant helping a recruitment agency. Generate objective and constructive feedback for candidates after interviews.`
-      },
-      {
-        role: 'user',
-        content: `Generate feedback for ${fullName} who applied for a ${candidate.position} position.
-          Current status: ${candidate.status}
-          ${interviewNotes ? `Interview notes: ${interviewNotes}` : 'No specific interview notes provided.'}`
-      }
-    ];
-
-    return generateChatCompletion(messages);
-  } catch (error) {
-    console.error('Failed to generate candidate feedback:', error);
-    return `Feedback for ${candidate.firstName} ${candidate.lastName}:\n\nThank you for your interest in the position. We appreciate the time you took to speak with us about the role.`;
-  }
-}
-
-/**
- * Process general queries
- */
-export async function processGeneralQuery(query: string, context?: string): Promise<string> {
-  // Use mock data if flag is set
-  if (USE_MOCK_DATA) {
-    return generateMockResponse([
-      {
-        role: 'user',
-        content: query
-      }
-    ]);
-  }
-
-  try {
-    const messages: OpenAIMessage[] = [
-      {
-        role: 'system',
-        content: `You are an AI assistant helping a recruitment agency. Provide helpful, concise, and professional responses to queries about recruitment, job searching, and career development.`
-      },
-      {
-        role: 'user',
-        content: `${query}${context ? `\nContext: ${context}` : ''}`
-      }
-    ];
-
-    return generateChatCompletion(messages);
-  } catch (error) {
-    console.error('Error processing query:', error);
-    return "I'm sorry, I couldn't process your query at this time. Please try again later.";
-  }
-}
+// Removed: formatJobDescription (backend now sends full_text)

@@ -1,171 +1,212 @@
-// src/components/ui/ModernAIInput.tsx
-import React, { forwardRef, useState, useRef, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { useTheme } from '@/app/context/ThemeContext';
-import TextArea from '@/components/ui/TextArea';
+"use client"
+
+import type React from "react"
+import { forwardRef, useState, useRef, useEffect } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { useTheme } from "@/app/context/ThemeContext"
+import TextArea from "@/components/ui/TextArea"
+import { FiSend, FiUser, FiBriefcase, FiCommand } from "react-icons/fi"
 
 interface ModernAIInputProps {
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-  onKeyDown: (e: React.KeyboardEvent) => void;
-  onSend: () => void;
-  onSlashCommand: () => void;
-  placeholder?: string;
-  disabled?: boolean;
-  entityName?: string | null;
-  entityType?: 'candidate' | 'company' | null;
+  value: string
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  onSend: () => void
+  onSlashCommand: () => void
+  placeholder?: string
+  disabled?: boolean
+  entityName?: string | null
+  entityType?: "candidate" | "company" | null
 }
 
-const ModernAIInput = forwardRef<HTMLTextAreaElement, ModernAIInputProps>(({
-  value,
-  onChange,
-  onKeyDown,
-  onSend,
-  onSlashCommand,
-  placeholder = 'Type a message...',
-  disabled = false,
-  entityName = null,
-  entityType = null
-}, ref) => {
-  const { colors, theme } = useTheme();
-  const [isFocused, setIsFocused] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+const ModernAIInput = forwardRef<HTMLTextAreaElement, ModernAIInputProps>(
+  (
+    {
+      value,
+      onChange,
+      onKeyDown,
+      onSend,
+      onSlashCommand,
+      placeholder = "Type a message or / for commands...",
+      disabled = false,
+      entityName = null,
+      entityType = null,
+    },
+    ref,
+  ) => {
+    const { colors, theme } = useTheme()
+    const [isFocused, setIsFocused] = useState(false)
+    const [showSlashHint, setShowSlashHint] = useState(false)
+    const containerRef = useRef<HTMLDivElement>(null)
+    const isLightTheme = theme === "light"
 
-  // Handle slash command
-  const handleInputKeyDown = (e: React.KeyboardEvent) => {
-    // Check for slash command
-    if (e.key === '/' && value === '') {
-      e.preventDefault();
-      onSlashCommand();
+    const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "/" && value === "") {
+        e.preventDefault()
+        onSlashCommand()
+        return
+      }
+      onKeyDown(e)
     }
 
-    // Pass the event to the parent handler for other key events
-    onKeyDown(e);
-  };
+    // Show slash hint when input is empty and focused
+    useEffect(() => {
+      setShowSlashHint(isFocused && value === "")
+    }, [isFocused, value])
 
-  // Effect for animation when entity changes
-  useEffect(() => {
-    if (entityName && containerRef.current) {
-      containerRef.current.classList.add('entity-changed');
-      setTimeout(() => {
-        if (containerRef.current) {
-          containerRef.current.classList.remove('entity-changed');
+    useEffect(() => {
+      if (entityName && containerRef.current) {
+        const inputElement = containerRef.current.querySelector("textarea")
+        if (inputElement) {
+          inputElement.style.transform = "scale(1.02)"
+          setTimeout(() => {
+            inputElement.style.transform = "scale(1)"
+          }, 200)
         }
-      }, 800);
-    }
-  }, [entityName]);
+      }
+    }, [entityName])
 
-  return (
-    <div className="relative w-full" ref={containerRef}>
-      {/* Entity badge */}
-      {entityName && (
-        <motion.div
-          className="absolute -top-8 left-4 z-10 rounded-t-lg px-3 py-1.5 font-medium text-xs shadow-sm flex items-center gap-1.5"
-          initial={{ opacity: 0, y: 5 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 5 }}
+    const entityIcon = entityType === "candidate" ? <FiUser /> : <FiBriefcase />
+    const entityColor = entityType === "candidate" ? colors.primary : colors.secondary
+    const canSend = !disabled && value.trim().length > 0
+
+    return (
+      <div className="relative w-full" ref={containerRef}>
+        <AnimatePresence>
+          {entityName && (
+            <motion.div
+              className="absolute -top-8 left-4 z-0 rounded-t-lg px-3 py-1.5 font-medium text-xs shadow-sm flex items-center gap-1.5"
+              initial={{ opacity: 0, y: 10, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              exit={{ opacity: 0, y: 10, height: 0 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              style={{
+                background: isLightTheme ? `${entityColor}15` : `${entityColor}26`,
+                color: entityColor,
+                borderTop: `2px solid ${entityColor}`,
+                borderLeft: `1px solid ${entityColor}40`,
+                borderRight: `1px solid ${entityColor}40`,
+              }}
+            >
+              <span className="text-[0.7rem] uppercase tracking-wider font-bold opacity-70">Context</span>
+              <div className="w-4 h-4 flex items-center justify-center">{entityIcon}</div>
+              <span className="font-semibold">{entityName}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div
+          className={`relative flex items-end rounded-xl transition-all duration-300 ${
+            entityName ? "rounded-t-none border-t-0" : ""
+          }`}
           style={{
-            background: entityType === 'candidate'
-              ? `${colors.primary}15`
-              : `${colors.secondary}15`,
-            color: entityType === 'candidate'
-              ? colors.primary
-              : colors.secondary,
-            borderBottomLeftRadius: '0',
-            borderLeft: entityType === 'candidate'
-              ? `2px solid ${colors.primary}`
-              : `2px solid ${colors.secondary}`
+            background: colors.card,
+            boxShadow: isFocused
+              ? `0 0 0 2px ${colors.primary}40, 0 4px 12px rgba(0,0,0,0.08)`
+              : "0 2px 6px rgba(0,0,0,0.05)",
+            border: `2px solid ${isFocused ? colors.primary : isLightTheme ? "#E2E8F0" : "#334155"}`,
+            borderTopColor: entityName
+              ? entityColor
+              : isFocused
+                ? colors.primary
+                : isLightTheme
+                  ? "#E2E8F0"
+                  : "#334155",
           }}
         >
-          {entityType === 'candidate' ? (
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-            </svg>
-          ) : (
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-            </svg>
-          )}
-          <span>{entityName}</span>
-        </motion.div>
-      )}
+          <div className="relative flex-1 bg-transparent rounded-lg overflow-hidden">
+            <TextArea
+              ref={ref}
+              value={value}
+              onChange={onChange}
+              onKeyDown={handleInputKeyDown}
+              placeholder={placeholder}
+              rows={1}
+              maxRows={6}
+              fullWidth
+              className="resize-none pr-14 border-0 shadow-none focus:shadow-none focus:ring-0 transition-all duration-200 bg-transparent"
+              style={{
+                padding: "0.875rem 0.875rem",
+                fontSize: "0.9375rem",
+                lineHeight: "1.6",
+                outline: "none",
+                color: colors.text,
+                minHeight: "56px",
+              }}
+              disabled={disabled}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              aria-label="Message input"
+            />
 
-      {/* Main input container */}
-      <div
-        className={`relative flex items-end rounded-xl px-3 pt-3 pb-2.5 transition-all duration-200 border ${
-          isFocused ? `border-${colors.primary} shadow-md` : theme === 'light' ? 'border-gray-200' : 'border-gray-700'
-        } ${entityName ? 'border-t-0 rounded-t-none' : ''}`}
-        style={{
-          background: colors.card,
-          boxShadow: isFocused
-            ? `0 4px 6px -1px ${colors.primary}20, 0 2px 4px -1px ${colors.primary}10`
-            : 'none',
-          borderColor: isFocused ? colors.primary : colors.border
-        }}
-      >
-        <div className="relative flex-1">
-          <TextArea
-            ref={ref}
-            value={value}
-            onChange={onChange}
-            onKeyDown={handleInputKeyDown}
-            placeholder={value === '' ? 'Type / for commands or start typing...' : placeholder}
-            rows={1}
-            maxRows={6}
-            fullWidth
-            className="resize-none pr-14 border-0 shadow-none focus:shadow-none focus:ring-0 transition-all duration-200 rounded-lg bg-transparent"
+            <AnimatePresence>
+              {showSlashHint && (
+                <motion.div
+                  className="absolute left-4 top-1/2 transform -translate-y-1/2 flex items-center gap-2 pointer-events-none"
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 0.6, x: 0 }}
+                  exit={{ opacity: 0, x: -10 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <div className="w-5 h-5 rounded-md flex items-center justify-center bg-gray-200 dark:bg-gray-700">
+                    <FiCommand className="w-3 h-3" />
+                  </div>
+                  <span className="text-sm opacity-70">Type / for commands</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <motion.button
+            onClick={onSend}
+            disabled={!canSend}
+            className="absolute right-3 bottom-3 rounded-lg flex items-center justify-center transition-all duration-200 transform"
+            title="Send message"
             style={{
-              paddingLeft: '0.5rem',
-              paddingRight: '3.5rem', // Space for send button
-              fontSize: '0.9375rem',
-              lineHeight: '1.5',
-              outline: 'none',
-              color: colors.text
+              width: "42px",
+              height: "42px",
+              background: canSend
+                ? `linear-gradient(135deg, ${colors.primary}, ${colors.primary}dd)`
+                : isLightTheme
+                  ? "#E2E8F0"
+                  : "#334155",
+              color: canSend ? "#FFFFFF" : isLightTheme ? "#94A3B8" : "#475569",
+              opacity: canSend ? 1 : 0.6,
             }}
-            disabled={disabled}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-          />
+            whileHover={canSend ? { scale: 1.05 } : {}}
+            whileTap={canSend ? { scale: 0.95 } : {}}
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{
+              scale: 1,
+              opacity: 1,
+              boxShadow: canSend ? `0 2px 8px ${colors.primary}50` : "none",
+            }}
+            transition={{
+              type: "spring",
+              stiffness: 400,
+              damping: 15,
+            }}
+          >
+            <FiSend className="w-5 h-5" />
+          </motion.button>
         </div>
 
-        {/* Send button */}
-        <button
-          onClick={onSend}
-          disabled={disabled || !value.trim()}
-          className={`p-2 rounded-lg ml-1 flex items-center justify-center transition-all duration-200 transform ${
-            value.trim() ? 'scale-100' : 'scale-95 opacity-70'
-          }`}
-          title="Send message"
-          style={{
-            background: value.trim()
-              ? colors.primary
-              : theme === 'light' ? '#E2E8F0' : '#334155',
-            color: value.trim() ? '#FFFFFF' : theme === 'light' ? '#94A3B8' : '#475569'
-          }}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-          </svg>
-        </button>
+        {/* Character count indicator (optional) */}
+        {value.length > 0 && (
+          <motion.div
+            className="absolute right-3 -bottom-6 text-xs opacity-60"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.6 }}
+            exit={{ opacity: 0 }}
+          >
+            {value.length} {value.length === 1 ? "character" : "characters"}
+          </motion.div>
+        )}
       </div>
+    )
+  },
+)
 
-      {/* Custom animations via CSS */}
-      <style jsx global>{`
-        .entity-changed {
-          animation: pulse 0.8s ease-in-out;
-        }
+ModernAIInput.displayName = "ModernAIInput"
 
-        @keyframes pulse {
-          0% { transform: translateY(0); }
-          30% { transform: translateY(-2px); }
-          60% { transform: translateY(1px); }
-          100% { transform: translateY(0); }
-        }
-      `}</style>
-    </div>
-  );
-});
-
-ModernAIInput.displayName = 'ModernAIInput';
-
-export default ModernAIInput;
+export default ModernAIInput
