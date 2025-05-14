@@ -3,14 +3,15 @@ from typing import List, Optional, Dict, Any
 import logging
 
 # Import Pydantic models
-from ai_tools_models import (
-    CVAnalysisRequest, CVAnalysisResponse,
+from app.models.ai_tools_models import (
+    CVAnalysisRequest, CVAnalysisResponse, 
+    CandidateFeedbackRequest, CandidateFeedbackResponse,
     JobMatchRequest, JobMatchResponseItem,
     EmailGenerationRequest, EmailGenerationResponse,
     InterviewQuestionsRequest, InterviewQuestionItem,
     JobDescriptionRequest, JobDescriptionResponse,
     EmailTemplateInfoResponseItem,
-    ChatCompletionRequest, ChatCompletionResponse # If you add a chat endpoint
+    ChatCompletionRequest, ChatCompletionResponse
 )
 
 router = APIRouter()
@@ -147,3 +148,29 @@ async def chat_completion_endpoint(request_data: ChatCompletionRequest):
     except Exception as e:
         logger.error(f"Error in chat completion: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error in chat completion: {str(e)}")
+    
+
+@router.post("/generate-candidate-feedback", response_model=CandidateFeedbackResponse)
+async def generate_candidate_feedback_endpoint(request_data: CandidateFeedbackRequest):
+    """Generate professional feedback for a candidate"""
+    try:
+        candidate_info = request_data.candidate
+        
+        # Format candidate name
+        candidate_name = f"{candidate_info.get('firstName', '')} {candidate_info.get('lastName', '')}"
+        position = candidate_info.get('position', 'the role')
+        
+        # Use the AI service to generate feedback
+        feedback = ai_service.generate_candidate_feedback(
+            candidate_name=candidate_name,
+            position=position,
+            skills=candidate_info.get('skills', []),
+            experience=candidate_info.get('experience', [])
+        )
+        
+        logger.info(f"Successfully generated feedback for candidate: {candidate_name}")
+        return {"feedback": feedback}
+    except Exception as e:
+        logger.error(f"Error generating candidate feedback: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error generating candidate feedback: {str(e)}")
+

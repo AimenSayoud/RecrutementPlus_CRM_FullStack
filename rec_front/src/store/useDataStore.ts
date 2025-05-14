@@ -1,281 +1,326 @@
-// src/store/useDataStore.ts
 import { create } from 'zustand';
-import { apiService } from '@/lib';
-import { Candidate, Company, Job, CvAnalysisResponse, JobMatch } from '@/types';
+import api, { 
+  CVAnalysisResponse, 
+  JobMatchResponseItem, 
+  EmailGenerationResponse,
+  InterviewQuestionItem,
+  JobDescriptionResponse,
+  EmailTemplateInfo
+} from '@/lib/api-client';
+import { Candidate, Company } from '@/types';
 
 interface DataState {
-  // Candidates
+  // Data
   candidates: Candidate[];
-  isLoadingCandidates: boolean;
-  candidatesError: string | null;
-  selectedCandidate: Candidate | null;
-  
-  // Companies
   companies: Company[];
-  isLoadingCompanies: boolean;
-  companiesError: string | null;
-  selectedCompany: Company | null;
-  
-  // Jobs
-  jobs: Job[];
-  isLoadingJobs: boolean;
-  jobsError: string | null;
-  
-  // CV Analysis
-  cvAnalysis: CvAnalysisResponse | null;
-  isAnalyzingCv: boolean;
-  cvAnalysisError: string | null;
-  
-  // Job Matches
-  jobMatches: JobMatch[];
-  isMatchingJobs: boolean;
-  jobMatchesError: string | null;
-  
-  // Combined selected entity (either a candidate or company)
   selectedEntity: Candidate | Company | null;
+  emailTemplates: EmailTemplateInfo[];
   
-  // Actions
-  fetchCandidates: (officeId?: string) => Promise<Candidate[]>;
-  fetchCompanies: (officeId?: string) => Promise<Company[]>;
-  fetchJobs: (officeId?: string) => Promise<Job[]>;
-  analyzeCv: (cvText: string) => Promise<CvAnalysisResponse | null>;
-  matchJobs: (cvAnalysis: CvAnalysisResponse, jobId?: number) => Promise<JobMatch[] | null>;
-  setSelectedCandidate: (candidate: Candidate | null) => void;
-  setSelectedCompany: (company: Company | null) => void;
+  // Loading states
+  isLoadingCandidates: boolean;
+  isLoadingCompanies: boolean;
+  isLoadingEmailTemplates: boolean;
+  isProcessingAI: boolean;
+  
+  // Error states
+  candidatesError: string | null;
+  companiesError: string | null;
+  emailTemplatesError: string | null;
+  aiError: string | null;
+  
+  // AI response data
+  cvAnalysisResult: CVAnalysisResponse | null;
+  jobMatches: JobMatchResponseItem[] | null;
+  interviewQuestions: InterviewQuestionItem[] | null;
+  jobDescription: JobDescriptionResponse | null;
+  emailResult: EmailGenerationResponse | null;
+  aiResponse: string | null;
+  
+  // Regular data fetch functions
+  fetchCandidates: (officeId?: string) => Promise<void>;
+  fetchCompanies: (officeId?: string) => Promise<void>;
+  fetchEmailTemplates: () => Promise<void>;
+  
+  // Entity selection functions
+  setSelectedCandidate: (candidate: Candidate) => void;
+  setSelectedCompany: (company: Company) => void;
   clearSelectedEntity: () => void;
+  
+  // AI service functions
+  analyzeCv: (cvText: string) => Promise<CVAnalysisResponse>;
+  matchJobs: (cvAnalysis: CVAnalysisResponse, jobId?: number) => Promise<JobMatchResponseItem[]>;
+  generateEmail: (templateId: string, context: Record<string, any>) => Promise<EmailGenerationResponse>;
+  generateInterviewQuestions: (
+    jobDetails: { title: string; company_name?: string; description?: string; requirements?: string[]; skills?: string[] },
+    candidateInfo?: { name?: string; skills?: string[]; experience_summary?: string; experience_years?: number }
+  ) => Promise<InterviewQuestionItem[]>;
+  generateJobDescription: (
+    position: string,
+    companyName: string,
+    industry?: string,
+    requiredSkills?: string[]
+  ) => Promise<JobDescriptionResponse>;
+  generateCandidateFeedback: (candidate: Candidate) => Promise<string>;
+  processGeneralQuery: (query: string, context?: string) => Promise<string>;
 }
 
-// Mock data for development if needed
-const MOCK_CANDIDATES: Candidate[] = [
-  {
-    id: '1',
-    firstName: 'John',
-    lastName: 'Doe',
-    email: 'john.doe@example.com',
-    phone: '+123456789',
-    position: 'Frontend Developer',
-    status: 'new',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    tags: ['react', 'javascript'],
-    officeId: '1'
-  },
-  {
-    id: '2',
-    firstName: 'Jane',
-    lastName: 'Smith',
-    email: 'jane.smith@example.com',
-    phone: '+987654321',
-    position: 'UX Designer',
-    status: 'interview',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    tags: ['design', 'figma'],
-    officeId: '1'
-  }
-];
-
-const MOCK_COMPANIES: Company[] = [
-  {
-    id: '1',
-    name: 'Tech Innovations',
-    industry: 'Software Development',
-    contactPerson: 'Mike Johnson',
-    contactEmail: 'mike@techinnovations.com',
-    contactPhone: '+123456789',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    openPositions: 3,
-    officeId: '1'
-  },
-  {
-    id: '2',
-    name: 'Design Studio',
-    industry: 'UI/UX Design',
-    contactPerson: 'Sarah Williams',
-    contactEmail: 'sarah@designstudio.com',
-    contactPhone: '+987654321',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    openPositions: 2,
-    officeId: '1'
-  }
-];
-
 export const useDataStore = create<DataState>((set, get) => ({
-  // Initial state
+  // Initial data
   candidates: [],
-  isLoadingCandidates: false,
-  candidatesError: null,
-  selectedCandidate: null,
-  
   companies: [],
-  isLoadingCompanies: false,
-  companiesError: null,
-  selectedCompany: null,
-  
-  jobs: [],
-  isLoadingJobs: false,
-  jobsError: null,
-  
-  cvAnalysis: null,
-  isAnalyzingCv: false,
-  cvAnalysisError: null,
-  
-  jobMatches: [],
-  isMatchingJobs: false,
-  jobMatchesError: null,
-  
   selectedEntity: null,
+  emailTemplates: [],
   
-  // Actions
+  // Initial loading states
+  isLoadingCandidates: false,
+  isLoadingCompanies: false,
+  isLoadingEmailTemplates: false,
+  isProcessingAI: false,
+  
+  // Initial error states
+  candidatesError: null,
+  companiesError: null,
+  emailTemplatesError: null,
+  aiError: null,
+  
+  // Initial AI response data
+  cvAnalysisResult: null,
+  jobMatches: null,
+  interviewQuestions: null,
+  jobDescription: null,
+  emailResult: null,
+  aiResponse: null,
+  
+  // Fetch candidates
   fetchCandidates: async (officeId?: string) => {
-    // Check if data is already loaded to prevent unnecessary fetches
-    if (get().candidates.length > 0 && !get().isLoadingCandidates) {
-      console.log("✅ Using cached candidates data");
-      return get().candidates;
-    }
-    
-    console.log("🔄 Fetching candidates data...");
     set({ isLoadingCandidates: true, candidatesError: null });
-    
     try {
-      // Try API call with fallback to mock data
-      let candidates: Candidate[] = [];
+      // Mock implementation - in a real app, you'd call your API
+      // const response = await apiClient.get(`/candidates?officeId=${officeId || ''}`);
+      // Simulating API fetch until you connect your actual endpoint
+      const mockCandidates: Candidate[] = [
+        {
+          id: '1', firstName: 'John', lastName: 'Doe', email: 'john@example.com', position: 'Developer',
+          phone: '',
+          status: 'new',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tags: [],
+          officeId: ''
+        },
+        {
+          id: '2', firstName: 'Jane', lastName: 'Smith', email: 'jane@example.com', position: 'Designer',
+          phone: '',
+          status: 'new',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          tags: [],
+          officeId: ''
+        },
+        // Add more mock data as needed
+      ];
       
-      try {
-        candidates = await apiService.candidates.getAll(officeId);
-        console.log(`✅ Fetched ${candidates.length} candidates from API`);
-      } catch (apiError) {
-        console.warn("⚠️ API error, falling back to mock data:", apiError);
-        candidates = MOCK_CANDIDATES;
-      }
+      // In production, replace with:
+      // const candidates = response.data;
+      const candidates = mockCandidates;
       
-      // Always set candidates, even if it's an empty array
       set({ candidates, isLoadingCandidates: false });
-      return candidates;
     } catch (error) {
-      // Handle any unexpected errors
-      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch candidates';
-      console.error('❌ Error fetching candidates:', errorMessage);
-      set({ isLoadingCandidates: false, candidatesError: errorMessage });
-      
-      // Return empty array in case of error
-      return [];
+      console.error('Error fetching candidates:', error);
+      set({ 
+        isLoadingCandidates: false, 
+        candidatesError: error instanceof Error ? error.message : 'Failed to fetch candidates' 
+      });
     }
   },
   
+  // Fetch companies
   fetchCompanies: async (officeId?: string) => {
-    // Check if data is already loaded to prevent unnecessary fetches
-    if (get().companies.length > 0 && !get().isLoadingCompanies) {
-      console.log("✅ Using cached companies data");
-      return get().companies;
-    }
-    
-    console.log("🔄 Fetching companies data...");
     set({ isLoadingCompanies: true, companiesError: null });
-    
     try {
-      // Try API call with fallback to mock data
-      let companies: Company[] = [];
+      // Mock implementation - in a real app, you'd call your API
+      // const response = await apiClient.get(`/companies?officeId=${officeId || ''}`);
+      // Simulating API fetch until you connect your actual endpoint
+      const mockCompanies: Company[] = [
+        {
+          id: '1', name: 'Acme Inc', industry: 'Technology', contactPerson: 'Tom Johnson',
+          contactEmail: '',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          openPositions: 0,
+          officeId: ''
+        },
+        {
+          id: '2', name: 'Globex Corp', industry: 'Finance', contactPerson: 'Sarah Williams',
+          contactEmail: '',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          openPositions: 0,
+          officeId: ''
+        },
+        // Add more mock data as needed
+      ];
       
-      try {
-        companies = await apiService.companies.getAll(officeId);
-        console.log(`✅ Fetched ${companies.length} companies from API`);
-      } catch (apiError) {
-        console.warn("⚠️ API error, falling back to mock data:", apiError);
-        companies = MOCK_COMPANIES;
-      }
+      // In production, replace with:
+      // const companies = response.data;
+      const companies = mockCompanies;
       
-      // Always set companies, even if it's an empty array
       set({ companies, isLoadingCompanies: false });
-      return companies;
     } catch (error) {
-      // Handle any unexpected errors
-      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch companies';
-      console.error('❌ Error fetching companies:', errorMessage);
-      set({ isLoadingCompanies: false, companiesError: errorMessage });
-      
-      // Return empty array in case of error
-      return [];
+      console.error('Error fetching companies:', error);
+      set({ 
+        isLoadingCompanies: false, 
+        companiesError: error instanceof Error ? error.message : 'Failed to fetch companies' 
+      });
     }
   },
   
-  fetchJobs: async (officeId?: string) => {
-    // Similar pattern as fetchCandidates and fetchCompanies
-    if (get().jobs.length > 0 && !get().isLoadingJobs) {
-      return get().jobs;
-    }
-    
-    set({ isLoadingJobs: true, jobsError: null });
+  // Fetch email templates
+  fetchEmailTemplates: async () => {
+    set({ isLoadingEmailTemplates: true, emailTemplatesError: null });
     try {
-      const jobs = await apiService.jobs.getAll(officeId);
-      set({ jobs, isLoadingJobs: false });
-      return jobs;
+      const templates = await api.getEmailTemplates();
+      set({ emailTemplates: templates, isLoadingEmailTemplates: false });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch jobs';
-      set({ isLoadingJobs: false, jobsError: errorMessage });
-      console.error('Error fetching jobs:', error);
-      return [];
+      console.error('Error fetching email templates:', error);
+      set({ 
+        isLoadingEmailTemplates: false, 
+        emailTemplatesError: error instanceof Error ? error.message : 'Failed to fetch email templates' 
+      });
     }
   },
   
-  analyzeCv: async (cvText: string) => {
-    set({ isAnalyzingCv: true, cvAnalysisError: null });
-    try {
-      // Import dynamically to avoid circular dependency
-      const { analyzeCv } = await import('@/lib/openai-service'); 
-      const result = await analyzeCv(cvText);
-      set({ cvAnalysis: result, isAnalyzingCv: false });
-      return result;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to analyze CV';
-      set({ isAnalyzingCv: false, cvAnalysisError: errorMessage });
-      console.error('Error analyzing CV:', error);
-      return null;
-    }
+  // Entity selection functions
+  setSelectedCandidate: (candidate: Candidate) => {
+    set({ selectedEntity: candidate });
   },
   
-  matchJobs: async (cvAnalysis: CvAnalysisResponse, jobId?: number) => {
-    set({ isMatchingJobs: true, jobMatchesError: null });
-    try {
-      // Import dynamically to avoid circular dependency
-      const { matchJobs } = await import('@/lib/openai-service');
-      const matches = await matchJobs(cvAnalysis, jobId);
-      set({ jobMatches: matches, isMatchingJobs: false });
-      return matches;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to match jobs';
-      set({ isMatchingJobs: false, jobMatchesError: errorMessage });
-      console.error('Error matching jobs:', error);
-      return null;
-    }
-  },
-  
-  setSelectedCandidate: (candidate: Candidate | null) => {
-    console.log("🔄 Setting selected candidate:", candidate?.firstName);
-    set({ 
-      selectedCandidate: candidate,
-      selectedCompany: null,
-      selectedEntity: candidate
-    });
-  },
-  
-  setSelectedCompany: (company: Company | null) => {
-    console.log("🔄 Setting selected company:", company?.name);
-    set({ 
-      selectedCompany: company,
-      selectedCandidate: null,
-      selectedEntity: company
-    });
+  setSelectedCompany: (company: Company) => {
+    set({ selectedEntity: company });
   },
   
   clearSelectedEntity: () => {
-    console.log("🔄 Clearing selected entity");
-    set({ 
-      selectedCandidate: null,
-      selectedCompany: null,
-      selectedEntity: null
-    });
+    set({ selectedEntity: null });
+  },
+  
+  // AI service functions
+  analyzeCv: async (cvText: string) => {
+    set({ isProcessingAI: true, aiError: null });
+    try {
+      const result = await api.analyzeCv(cvText);
+      set({ cvAnalysisResult: result, isProcessingAI: false });
+      return result;
+    } catch (error) {
+      console.error('Error analyzing CV:', error);
+      set({ 
+        isProcessingAI: false, 
+        aiError: error instanceof Error ? error.message : 'Failed to analyze CV' 
+      });
+      throw error;
+    }
+  },
+  
+  matchJobs: async (cvAnalysis: CVAnalysisResponse, jobId?: number) => {
+    set({ isProcessingAI: true, aiError: null });
+    try {
+      const matches = await api.matchJobs(cvAnalysis, jobId);
+      set({ jobMatches: matches, isProcessingAI: false });
+      return matches;
+    } catch (error) {
+      console.error('Error matching jobs:', error);
+      set({ 
+        isProcessingAI: false, 
+        aiError: error instanceof Error ? error.message : 'Failed to match jobs' 
+      });
+      throw error;
+    }
+  },
+  
+  generateEmail: async (templateId: string, context: Record<string, any>) => {
+    set({ isProcessingAI: true, aiError: null });
+    try {
+      const result = await api.generateEmail(templateId, context);
+      set({ emailResult: result, isProcessingAI: false });
+      return result;
+    } catch (error) {
+      console.error('Error generating email:', error);
+      set({ 
+        isProcessingAI: false, 
+        aiError: error instanceof Error ? error.message : 'Failed to generate email' 
+      });
+      throw error;
+    }
+  },
+  
+  generateInterviewQuestions: async (
+    jobDetails: { title: string; company_name?: string; description?: string; requirements?: string[]; skills?: string[] },
+    candidateInfo?: { name?: string; skills?: string[]; experience_summary?: string; experience_years?: number }
+  ) => {
+    set({ isProcessingAI: true, aiError: null });
+    try {
+      const questions = await api.generateInterviewQuestions(jobDetails, candidateInfo);
+      set({ interviewQuestions: questions, isProcessingAI: false });
+      return questions;
+    } catch (error) {
+      console.error('Error generating interview questions:', error);
+      set({ 
+        isProcessingAI: false, 
+        aiError: error instanceof Error ? error.message : 'Failed to generate interview questions' 
+      });
+      throw error;
+    }
+  },
+  
+  generateJobDescription: async (
+    position: string,
+    companyName: string,
+    industry?: string,
+    requiredSkills?: string[]
+  ) => {
+    set({ isProcessingAI: true, aiError: null });
+    try {
+      const result = await api.generateJobDescription(position, companyName, industry, requiredSkills);
+      set({ jobDescription: result, isProcessingAI: false });
+      return result;
+    } catch (error) {
+      console.error('Error generating job description:', error);
+      set({ 
+        isProcessingAI: false, 
+        aiError: error instanceof Error ? error.message : 'Failed to generate job description' 
+      });
+      throw error;
+    }
+  },
+  
+  generateCandidateFeedback: async (candidate: Candidate) => {
+    set({ isProcessingAI: true, aiError: null });
+    try {
+      const feedback = await api.generateCandidateFeedback(candidate);
+      set({ aiResponse: feedback, isProcessingAI: false });
+      return feedback;
+    } catch (error) {
+      console.error('Error generating candidate feedback:', error);
+      set({ 
+        isProcessingAI: false, 
+        aiError: error instanceof Error ? error.message : 'Failed to generate candidate feedback' 
+      });
+      throw error;
+    }
+  },
+  
+  processGeneralQuery: async (query: string, context?: string) => {
+    set({ isProcessingAI: true, aiError: null });
+    try {
+      const response = await api.processGeneralQuery(query, context);
+      set({ aiResponse: response.content, isProcessingAI: false });
+      return response.content;
+    } catch (error) {
+      console.error('Error processing query:', error);
+      set({ 
+        isProcessingAI: false, 
+        aiError: error instanceof Error ? error.message : 'Failed to process query' 
+      });
+      throw error;
+    }
   }
 }));
