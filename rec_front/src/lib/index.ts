@@ -4,9 +4,10 @@ import { apiFallback } from './api-fallback';
 import { apiCombined, forceFallbackData } from './api-combined';
 
 // Check for environment variables and choose appropriate API
-const FORCE_MOCK_DATA = typeof window !== 'undefined' && window.location.search.includes('useMockData=true');
+const FORCE_MOCK_DATA = typeof window !== 'undefined' && 
+  (window.location.search.includes('useMockData=true') || process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true');
 
-// Re-export the combined API as the default API, or use fallback if forced via URL param
+// Re-export the combined API as the default API, or use fallback if forced via URL param or env var
 export const apiService = FORCE_MOCK_DATA ? forceFallbackData() : apiCombined;
 
 // Also export the individual APIs in case they are needed

@@ -1,5 +1,6 @@
 // src/hooks/useApiQuery.ts
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from '@/app/context/AuthContext';
 
 interface ApiQueryResult<T> {
   data: T | null;
@@ -12,20 +13,41 @@ export function useApiQuery<T>(apiCall: () => Promise<T>, dependencies: unknown[
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);
+  const { logout } = useAuth();
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
 
   const fetchData = useCallback(async () => {
+    if (!isMounted.current) return;
+    
     setLoading(true);
     setError(null);
     
     try {
       const result = await apiCall();
-      setData(result);
+      if (isMounted.current) {
+        setData(result);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err : new Error('An unknown error occurred'));
+      // Handle authentication errors
+      if (err instanceof Error && err.message.includes('session has expired')) {
+        logout();
+      }
+
+      if (isMounted.current) {
+        setError(err instanceof Error ? err : new Error('An unknown error occurred'));
+      }
     } finally {
-      setLoading(false);
+      if (isMounted.current) {
+        setLoading(false);
+      }
     }
-  }, [apiCall]);
+  }, [apiCall, logout]);
 
   useEffect(() => {
     // Individual dependencies from the spread array should be listed

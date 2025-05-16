@@ -1,23 +1,38 @@
 // src/lib/api.ts
 import { Candidate, Company, Job, User, Office } from '@/types';
 import { apiFallback } from './api-fallback';
+import { createApiClient, ApiClient } from './api-client';
 
 // API base URL from environment variables
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true';
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+export const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true';
 
 // Helper function to determine if we should use mock data
-const shouldUseMockData = () => {
+export const shouldUseMockData = () => {
   return USE_MOCK_DATA || typeof window === 'undefined';
 }
 
-// Helper function to handle API responses
-const handleResponse = async (response: Response) => {
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || 'An error occurred');
-  }
-  return response.json();
+// Initialize API client
+let apiClient: ApiClient;
+
+// Initialize client with authentication handling
+export const initApiClient = () => {
+  if (apiClient) return apiClient;
+  
+  apiClient = createApiClient({
+    baseUrl: API_BASE_URL,
+    getToken: () => {
+      if (typeof window === 'undefined') return null;
+      return localStorage.getItem('auth_token');
+    },
+    onAuthError: () => {
+      if (typeof window === 'undefined') return;
+      localStorage.removeItem('auth_token');
+      window.location.href = '/login';
+    },
+  });
+  
+  return apiClient;
 };
 
 // Helper function to format date objects
@@ -25,26 +40,12 @@ const formatDate = (dateStr: string): Date => {
   return new Date(dateStr);
 };
 
-// Generic fetcher function
-const fetcher = async <T>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<T> => {
-  try {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-      ...options,
-    });
-    
-    return handleResponse(response);
-  } catch (error) {
-    console.error('API Error:', error);
-    throw error;
+// Get the API client (initializes if needed)
+const getApiClient = (): ApiClient => {
+  if (!apiClient) {
+    return initApiClient();
   }
+  return apiClient;
 };
 
 // API Service
@@ -57,7 +58,7 @@ export const api = {
           ? `/api/v1/candidates?office_id=${officeId}`
           : '/api/v1/candidates';
         
-        const candidates = await fetcher<Candidate[]>(endpoint);
+        const candidates = await getApiClient().get<Candidate[]>(endpoint);
         
         // Ensure all date fields are properly converted to Date objects
         return candidates.map(candidate => ({
@@ -73,7 +74,7 @@ export const api = {
       
     getById: async (id: string) => {
       try {
-        const candidate = await fetcher<Candidate>(`/api/v1/candidates/${id}`);
+        const candidate = await getApiClient().get<Candidate>(`/api/v1/candidates/${id}`);
         
         return {
           ...candidate,
@@ -88,10 +89,7 @@ export const api = {
       
     create: async (candidate: Omit<Candidate, 'id' | 'createdAt' | 'updatedAt'>) => {
       try {
-        const newCandidate = await fetcher<Candidate>('/api/v1/candidates/', {
-          method: 'POST',
-          body: JSON.stringify(candidate),
-        });
+        const newCandidate = await getApiClient().post<Candidate>('/api/v1/candidates/', candidate);
         
         return {
           ...newCandidate,
@@ -106,10 +104,7 @@ export const api = {
       
     update: async (id: string, updates: Partial<Candidate>) => {
       try {
-        const updatedCandidate = await fetcher<Candidate>(`/api/v1/candidates/${id}`, {
-          method: 'PUT',
-          body: JSON.stringify(updates),
-        });
+        const updatedCandidate = await getApiClient().put<Candidate>(`/api/v1/candidates/${id}`, updates);
         
         return {
           ...updatedCandidate,
@@ -124,9 +119,7 @@ export const api = {
       
     delete: async (id: string) => {
       try {
-        const result = await fetcher<{ success: boolean }>(`/api/v1/candidates/${id}`, {
-          method: 'DELETE',
-        });
+        const result = await getApiClient().delete<{ success: boolean }>(`/api/v1/candidates/${id}`);
         
         return result.success;
       } catch (error) {
@@ -144,7 +137,7 @@ export const api = {
           ? `/api/v1/companies?office_id=${officeId}`
           : '/api/v1/companies';
         
-        const companies = await fetcher<Company[]>(endpoint);
+        const companies = await getApiClient().get<Company[]>(endpoint);
         
         return companies.map(company => ({
           ...company,
@@ -159,7 +152,7 @@ export const api = {
       
     getById: async (id: string) => {
       try {
-        const company = await fetcher<Company>(`/api/v1/companies/${id}`);
+        const company = await getApiClient().get<Company>(`/api/v1/companies/${id}`);
         
         return {
           ...company,
@@ -174,10 +167,7 @@ export const api = {
       
     create: async (company: Omit<Company, 'id' | 'createdAt' | 'updatedAt'>) => {
       try {
-        const newCompany = await fetcher<Company>('/api/v1/companies/', {
-          method: 'POST',
-          body: JSON.stringify(company),
-        });
+        const newCompany = await getApiClient().post<Company>('/api/v1/companies/', company);
         
         return {
           ...newCompany,
@@ -192,10 +182,7 @@ export const api = {
       
     update: async (id: string, updates: Partial<Company>) => {
       try {
-        const updatedCompany = await fetcher<Company>(`/api/v1/companies/${id}`, {
-          method: 'PUT',
-          body: JSON.stringify(updates),
-        });
+        const updatedCompany = await getApiClient().put<Company>(`/api/v1/companies/${id}`, updates);
         
         return {
           ...updatedCompany,
@@ -210,9 +197,7 @@ export const api = {
       
     delete: async (id: string) => {
       try {
-        const result = await fetcher<{ success: boolean }>(`/api/v1/companies/${id}`, {
-          method: 'DELETE',
-        });
+        const result = await getApiClient().delete<{ success: boolean }>(`/api/v1/companies/${id}`);
         
         return result.success;
       } catch (error) {
@@ -230,7 +215,7 @@ export const api = {
           ? `/api/v1/jobs?office_id=${officeId}`
           : '/api/v1/jobs';
         
-        const jobs = await fetcher<Job[]>(endpoint);
+        const jobs = await getApiClient().get<Job[]>(endpoint);
         
         return jobs.map(job => ({
           ...job,
@@ -246,7 +231,7 @@ export const api = {
       
     getById: async (id: string) => {
       try {
-        const job = await fetcher<Job>(`/api/v1/jobs/${id}`);
+        const job = await getApiClient().get<Job>(`/api/v1/jobs/${id}`);
         
         return {
           ...job,
@@ -262,7 +247,7 @@ export const api = {
       
     getByCompany: async (companyId: string) => {
       try {
-        const jobs = await fetcher<Job[]>(`/api/v1/jobs/company/${companyId}`);
+        const jobs = await getApiClient().get<Job[]>(`/api/v1/jobs/company/${companyId}`);
         
         return jobs.map(job => ({
           ...job,
@@ -278,10 +263,7 @@ export const api = {
       
     create: async (job: Omit<Job, 'id' | 'createdAt' | 'updatedAt'>) => {
       try {
-        const newJob = await fetcher<Job>('/api/v1/jobs/', {
-          method: 'POST',
-          body: JSON.stringify(job),
-        });
+        const newJob = await getApiClient().post<Job>('/api/v1/jobs/', job);
         
         return {
           ...newJob,
@@ -297,10 +279,7 @@ export const api = {
       
     update: async (id: string, updates: Partial<Job>) => {
       try {
-        const updatedJob = await fetcher<Job>(`/api/v1/jobs/${id}`, {
-          method: 'PUT',
-          body: JSON.stringify(updates),
-        });
+        const updatedJob = await getApiClient().put<Job>(`/api/v1/jobs/${id}`, updates);
         
         return {
           ...updatedJob,
@@ -316,9 +295,7 @@ export const api = {
       
     delete: async (id: string) => {
       try {
-        const result = await fetcher<{ success: boolean }>(`/api/v1/jobs/${id}`, {
-          method: 'DELETE',
-        });
+        const result = await getApiClient().delete<{ success: boolean }>(`/api/v1/jobs/${id}`);
         
         return result.success;
       } catch (error) {
@@ -336,7 +313,7 @@ export const api = {
           ? `/api/v1/users?office_id=${officeId}`
           : '/api/v1/users';
         
-        const users = await fetcher<User[]>(endpoint);
+        const users = await getApiClient().get<User[]>(endpoint);
         
         return users.map(user => ({
           ...user,
@@ -352,7 +329,7 @@ export const api = {
       
     getById: async (id: string) => {
       try {
-        const user = await fetcher<User>(`/api/v1/users/${id}`);
+        const user = await getApiClient().get<User>(`/api/v1/users/${id}`);
         
         return {
           ...user,
@@ -365,13 +342,27 @@ export const api = {
         throw error;
       }
     },
+    
+    login: async (email: string, password: string) => {
+      try {
+        // The backend login endpoint is at /api/v1/users/login
+        const result = await getApiClient().post<{ user: User; token: string }>(
+          '/api/v1/users/login', 
+          { email, password }
+        );
+        return result;
+      } catch (error) {
+        console.error('Failed to login:', error);
+        throw error;
+      }
+    },
   },
   
   // Skills
   skills: {
     getAll: async () => {
       try {
-        return await fetcher<{ id: number, name: string }[]>('/api/v1/skills');
+        return await getApiClient().get<{ id: number, name: string }[]>('/api/v1/skills');
       } catch (error) {
         console.error('Failed to fetch skills:', error);
         throw error;
@@ -383,7 +374,7 @@ export const api = {
   offices: {
     getAll: async () => {
       try {
-        const offices = await fetcher<Office[]>('/api/v1/offices');
+        const offices = await getApiClient().get<Office[]>('/api/v1/offices');
         
         return offices.map(office => ({
           ...office,
@@ -398,7 +389,7 @@ export const api = {
       
     getById: async (id: string) => {
       try {
-        const office = await fetcher<Office>(`/api/v1/offices/${id}`);
+        const office = await getApiClient().get<Office>(`/api/v1/offices/${id}`);
         
         return {
           ...office,
@@ -411,4 +402,140 @@ export const api = {
       }
     },
   },
+  
+  // Team
+  team: {
+    getAll: async (officeId?: string, filters?: { type?: string; status?: string }) => {
+      try {
+        let endpoint = '/api/v1/team';
+        const params = new URLSearchParams();
+        
+        if (officeId) params.append('office_id', officeId);
+        if (filters?.type) params.append('type', filters.type);
+        if (filters?.status) params.append('status', filters.status);
+        
+        if (params.toString()) {
+          endpoint += `?${params.toString()}`;
+        }
+        
+        const teamMembers = await getApiClient().get<any[]>(endpoint);
+        
+        return teamMembers.map(member => ({
+          ...member,
+          createdAt: member.createdAt instanceof Date ? member.createdAt : new Date(member.createdAt),
+          updatedAt: member.updatedAt instanceof Date ? member.updatedAt : new Date(member.updatedAt),
+          lastActivity: member.lastActivity ? (member.lastActivity instanceof Date ? member.lastActivity : new Date(member.lastActivity)) : undefined,
+          joinedDate: member.joinedDate ? (member.joinedDate instanceof Date ? member.joinedDate : new Date(member.joinedDate)) : undefined,
+        }));
+      } catch (error) {
+        console.error('Failed to fetch team members:', error);
+        throw error;
+      }
+    },
+    
+    getById: async (id: string) => {
+      try {
+        const member = await getApiClient().get<any>(`/api/v1/team/${id}`);
+        
+        return {
+          ...member,
+          createdAt: member.createdAt instanceof Date ? member.createdAt : new Date(member.createdAt),
+          updatedAt: member.updatedAt instanceof Date ? member.updatedAt : new Date(member.updatedAt),
+          lastActivity: member.lastActivity ? (member.lastActivity instanceof Date ? member.lastActivity : new Date(member.lastActivity)) : undefined,
+          joinedDate: member.joinedDate ? (member.joinedDate instanceof Date ? member.joinedDate : new Date(member.joinedDate)) : undefined,
+        };
+      } catch (error) {
+        console.error('Failed to fetch team member:', error);
+        throw error;
+      }
+    },
+    
+    getByUserId: async (userId: string) => {
+      try {
+        const member = await getApiClient().get<any>(`/api/v1/team/user/${userId}`);
+        
+        return {
+          ...member,
+          createdAt: member.createdAt instanceof Date ? member.createdAt : new Date(member.createdAt),
+          updatedAt: member.updatedAt instanceof Date ? member.updatedAt : new Date(member.updatedAt),
+          lastActivity: member.lastActivity ? (member.lastActivity instanceof Date ? member.lastActivity : new Date(member.lastActivity)) : undefined,
+          joinedDate: member.joinedDate ? (member.joinedDate instanceof Date ? member.joinedDate : new Date(member.joinedDate)) : undefined,
+        };
+      } catch (error) {
+        console.error('Failed to fetch team member by user ID:', error);
+        throw error;
+      }
+    },
+    
+    create: async (member: any) => {
+      try {
+        const newMember = await getApiClient().post<any>('/api/v1/team/', member);
+        
+        return {
+          ...newMember,
+          createdAt: newMember.createdAt instanceof Date ? newMember.createdAt : new Date(newMember.createdAt),
+          updatedAt: newMember.updatedAt instanceof Date ? newMember.updatedAt : new Date(newMember.updatedAt),
+        };
+      } catch (error) {
+        console.error('Failed to create team member:', error);
+        throw error;
+      }
+    },
+    
+    update: async (id: string, updates: any) => {
+      try {
+        const updatedMember = await getApiClient().put<any>(`/api/v1/team/${id}`, updates);
+        
+        return {
+          ...updatedMember,
+          createdAt: updatedMember.createdAt instanceof Date ? updatedMember.createdAt : new Date(updatedMember.createdAt),
+          updatedAt: updatedMember.updatedAt instanceof Date ? updatedMember.updatedAt : new Date(updatedMember.updatedAt),
+        };
+      } catch (error) {
+        console.error('Failed to update team member:', error);
+        throw error;
+      }
+    },
+    
+    delete: async (id: string) => {
+      try {
+        const result = await getApiClient().delete<{ success: boolean }>(`/api/v1/team/${id}`);
+        
+        return result.success;
+      } catch (error) {
+        console.error('Failed to delete team member:', error);
+        throw error;
+      }
+    },
+  },
+  
+  // Dashboard data
+  dashboard: {
+    getMetrics: async (officeId?: string) => {
+      try {
+        const endpoint = officeId 
+          ? `/api/v1/dashboard/metrics?office_id=${officeId}`
+          : '/api/v1/dashboard/metrics';
+        return await getApiClient().get(endpoint);
+      } catch (error) {
+        console.error('Failed to fetch dashboard metrics:', error);
+        throw error;
+      }
+    },
+    
+    getRecentActivity: async (officeId?: string) => {
+      try {
+        const endpoint = officeId 
+          ? `/api/v1/dashboard/activity?office_id=${officeId}`
+          : '/api/v1/dashboard/activity';
+        return await getApiClient().get(endpoint);
+      } catch (error) {
+        console.error('Failed to fetch recent activity:', error);
+        throw error;
+      }
+    },
+  },
 };
+
+// Initialize API client on module load
+initApiClient();

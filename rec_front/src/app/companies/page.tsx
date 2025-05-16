@@ -10,8 +10,8 @@ import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 //import Badge from '@/components/ui/Badge';
 import CompanyDetailModal from '@/components/companies/CompanyDetailModal';
-import { apiService } from '@/lib';
-import { useApiQuery } from '@/hooks/useApiQuery';
+import { useCompanyStore } from '@/store/useCompanyStore';
+import { useJobStore } from '@/store/useJobStore';
 import { Company, Job } from '@/types';
 import { 
   motion, AnimatePresence, useScroll, 
@@ -55,6 +55,10 @@ const CompaniesPage = () => {
   const filterBarRef = useRef<HTMLDivElement>(null);
   const statsRef = useRef<HTMLDivElement>(null);
   
+  // Zustand stores
+  const { companies, isLoading: companiesLoading, error: companiesError, fetchCompanies } = useCompanyStore();
+  const { jobs, fetchJobs } = useJobStore();
+  
   // Framer Motion hooks for animations
   const { scrollY } = useScroll();
   const scrollProgress = useSpring(useTransform(scrollY, [0, 1000], [0, 1]), { stiffness: 300, damping: 30 });
@@ -92,17 +96,12 @@ const CompaniesPage = () => {
     }
   }, []);
 
-  // Fetch companies based on user's office access
-  const { data: companies, loading, error, refetch } = useApiQuery<Company[]>(
-    () => apiService.companies.getAll(user?.role === 'super_admin' ? undefined : user?.officeId),
-    [user?.officeId]
-  );
-
-  // Fetch jobs to show in company detail modal
-  const { data: jobs } = useApiQuery<Job[]>(
-    () => apiService.jobs.getAll(user?.role === 'super_admin' ? undefined : user?.officeId),
-    [user?.officeId]
-  );
+  // Fetch companies and jobs on component mount
+  useEffect(() => {
+    const officeId = user?.role === 'super_admin' ? undefined : user?.officeId;
+    fetchCompanies(officeId);
+    fetchJobs(officeId);
+  }, [user?.officeId, user?.role, fetchCompanies, fetchJobs]);
 
   // Get unique industries for filter dropdown
   const uniqueIndustries = useMemo(() => {
@@ -323,15 +322,19 @@ const CompaniesPage = () => {
     try {
       if (company.id.startsWith('temp-')) {
         // Create new company
-        await apiService.companies.create(company);
+        const createCompany = useCompanyStore.getState().createCompany;
+        await createCompany(company);
         addRecentActivity(company.id, 'created');
       } else {
         // Update existing company
-        await apiService.companies.update(company.id, company);
+        const updateCompany = useCompanyStore.getState().updateCompany;
+        await updateCompany(company.id, company);
         addRecentActivity(company.id, 'updated');
       }
       
-      refetch();
+      // Refresh companies list
+      const officeId = user?.role === 'super_admin' ? undefined : user?.officeId;
+      fetchCompanies(officeId);
     } catch (error) {
       console.error('Failed to save company:', error);
     }
@@ -341,12 +344,15 @@ const CompaniesPage = () => {
   const handleDeleteCompany = async (id: string) => {
     if (window.confirm('Are you sure you want to delete this company?')) {
       try {
-        await apiService.companies.delete(id);
+        const deleteCompany = useCompanyStore.getState().deleteCompany;
+        await deleteCompany(id);
         addRecentActivity(id, 'deleted');
         setFavoriteCompanies(prevFavorites =>
           prevFavorites.filter(companyId => companyId !== id)
         );
-        refetch();
+        // Refresh companies list
+        const officeId = user?.role === 'super_admin' ? undefined : user?.officeId;
+        fetchCompanies(officeId);
       } catch (error) {
         console.error('Failed to delete company:', error);
       }
@@ -360,8 +366,9 @@ const CompaniesPage = () => {
     if (window.confirm(`Are you sure you want to delete ${selectedCompanies.length} companies?`)) {
       try {
         // Delete each selected company
+        const deleteCompany = useCompanyStore.getState().deleteCompany;
         await Promise.all(
-          selectedCompanies.map(id => apiService.companies.delete(id))
+          selectedCompanies.map(id => deleteCompany(id))
         );
         
         // Update favorites and activity
@@ -373,7 +380,8 @@ const CompaniesPage = () => {
         // Clear selection and reload data
         setSelectedCompanies([]);
         setIsSelectionMode(false);
-        refetch();
+        const officeId = user?.role === 'super_admin' ? undefined : user?.officeId;
+        fetchCompanies(officeId);
       } catch (error) {
         console.error('Failed to delete companies:', error);
       }
@@ -546,7 +554,7 @@ const CompaniesPage = () => {
   };
 
   // Handle error state
-  if (error) {
+  if (companiesError) {
     return (
       <motion.div 
         className="p-6 text-center"
@@ -565,13 +573,13 @@ const CompaniesPage = () => {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
           <h3 className="text-xl font-medium mb-2">Error Loading Companies</h3>
-          <p className="mb-4">{error.message}</p>
+          <p className="mb-4">{companiesError.message}</p>
           <motion.div 
             whileHover={{ scale: 1.05 }} 
             whileTap={{ scale: 0.95 }}
           >
             <Button 
-              onClick={() => refetch()} 
+              onClick={() => fetchCompanies()} 
               variant="primary"
               leftIcon={
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -898,7 +906,7 @@ const CompaniesPage = () => {
                                 animate={{ opacity: 1 }}
                                 transition={{ delay: 0.2 }}
                               >
-                                {loading ? (
+                                {companiesLoading ? (
                                   <motion.span
                                     initial={{ opacity: 0.5 }}
                                     animate={{ opacity: [0.5, 1, 0.5] }}
@@ -959,7 +967,7 @@ const CompaniesPage = () => {
                                 animate={{ opacity: 1 }}
                                 transition={{ delay: 0.3 }}
                               >
-                                {loading ? (
+                                {companiesLoading ? (
                                   <motion.span
                                     initial={{ opacity: 0.5 }}
                                     animate={{ opacity: [0.5, 1, 0.5] }}
@@ -1020,7 +1028,7 @@ const CompaniesPage = () => {
                                 animate={{ opacity: 1 }}
                                 transition={{ delay: 0.4 }}
                               >
-                                {loading ? (
+                                {companiesLoading ? (
                                   <motion.span
                                     initial={{ opacity: 0.5 }}
                                     animate={{ opacity: [0.5, 1, 0.5] }}
@@ -1081,7 +1089,7 @@ const CompaniesPage = () => {
                                 animate={{ opacity: 1 }}
                                 transition={{ delay: 0.5 }}
                               >
-                                {loading ? (
+                                {companiesLoading ? (
                                   <motion.span
                                     initial={{ opacity: 0.5 }}
                                     animate={{ opacity: [0.5, 1, 0.5] }}
@@ -1113,7 +1121,7 @@ const CompaniesPage = () => {
                     >
                       <div className="h-full">
                         <h3 className="text-sm font-medium mb-3" style={{ color: colors.text }}>Industry Distribution</h3>
-                        {loading ? (
+                        {companiesLoading ? (
                           <div className="flex justify-center items-center h-32">
                             <motion.div
                               className="w-8 h-8 border-2 border-t-transparent rounded-full"
@@ -1559,7 +1567,7 @@ const CompaniesPage = () => {
         {/* Results info */}
         <motion.div variants={itemVariants} className="flex justify-between items-center mb-4">
           <p className="text-sm" style={{ color: `${colors.text}99` }}>
-            {loading ? 'Loading companies...' : `Showing ${filteredCompanies.length} ${filteredCompanies.length === 1 ? 'company' : 'companies'}`}
+            {companiesLoading ? 'Loading companies...' : `Showing ${filteredCompanies.length} ${filteredCompanies.length === 1 ? 'company' : 'companies'}`}
             {searchTerm && ` matching "${searchTerm}"`}
             {industryFilter !== 'all' && ` in ${industryFilter}`}
           </p>
@@ -1573,7 +1581,7 @@ const CompaniesPage = () => {
         {/* Companies Grid/List/Kanban View */}
         <AnimatePresence mode="wait">
           {/* Loading state */}
-          {loading ? (
+          {companiesLoading ? (
             <motion.div 
               className="flex justify-center items-center py-16"
               initial={{ opacity: 0 }}
@@ -1613,6 +1621,45 @@ const CompaniesPage = () => {
                 >
                   Preparing your data
                 </motion.p>
+              </div>
+            </motion.div>
+          ) : companiesError ? (
+            <motion.div 
+              className="flex flex-col items-center justify-center py-16"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              key="error"
+            >
+              <div className="text-center">
+                <svg 
+                  className="w-16 h-16 mx-auto mb-4" 
+                  fill="none" 
+                  stroke="#ef4444" 
+                  viewBox="0 0 24 24" 
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    strokeWidth={2} 
+                    d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" 
+                  />
+                </svg>
+                <h3 className="text-xl font-medium mb-2" style={{ color: colors.text }}>Error loading companies</h3>
+                <p style={{ color: `${colors.text}99` }}>
+                  {(companiesError as Error)?.message || 'An error occurred while loading companies'}
+                </p>
+                <Button 
+                  variant="outline"
+                  onClick={() => {
+                    const officeId = user?.role === 'super_admin' ? undefined : user?.officeId;
+                    fetchCompanies(officeId);
+                  }}
+                  className="mt-4"
+                >
+                  Retry
+                </Button>
               </div>
             </motion.div>
           ) : filteredCompanies.length === 0 ? (

@@ -1,13 +1,11 @@
-// src/app/candidates/page.tsx
 'use client';
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
-import { apiService } from '@/lib';
-import { useApiQuery } from '@/hooks/useApiQuery';
 import { Candidate } from '@/types';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
+import { useCandidateStore } from '@/store/useCandidateStore';
+import { useAuthStore } from '@/store/useAuthStore';
 
 // UI Components
 import Card from '@/components/ui/Card';
@@ -170,7 +168,7 @@ const ViewModeSwitcher: React.FC<ViewModeSwitcherProps> = ({
 
 const CandidatesPage = () => {
   const { colors, theme } = useTheme();
-  const { user } = useAuth();
+  const { user } = useAuthStore();
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<FilterState>({
@@ -181,15 +179,27 @@ const CandidatesPage = () => {
   });
   const [showFilters, setShowFilters] = useState(false);
   const [sortBy, setSortBy] = useState<SortOption>('newest');
-  const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showMobileSearch, setShowMobileSearch] = useState(false);
-
-  const { data: candidates, loading, error, refetch } = useApiQuery<Candidate[]>(
-    () => apiService.candidates.getAll(user?.role === 'super_admin' ? undefined : user?.officeId),
-    [user?.officeId]
-  );
+  
+  // Use candidate store instead of direct API call
+  const { 
+    candidates, 
+    selectedCandidate, 
+    setSelectedCandidate,
+    isLoading: loading, 
+    error, 
+    fetchCandidates,
+    updateCandidate,
+    createCandidate,
+    deleteCandidate
+  } = useCandidateStore();
+  
+  // Fetch candidates on mount and when user changes
+  useEffect(() => {
+    fetchCandidates(user?.role === 'super_admin' ? undefined : user?.officeId);
+  }, [user?.officeId, user?.role, fetchCandidates]);
 
   const metrics = useMemo(() => {
     if (!candidates) return { total: 0, new: 0, interview: 0, offer: 0 };
@@ -363,11 +373,9 @@ const CandidatesPage = () => {
         recruited: 'hired',
       };
 
-      await apiService.candidates.update(candidateId, {
+      await updateCandidate(candidateId, {
         status: stageToStatusMap[newStage] as Candidate['status'],
       });
-
-      refetch();
     } catch (error) {
       console.error('Failed to update candidate stage:', error);
     }
@@ -376,12 +384,26 @@ const CandidatesPage = () => {
   const handleSaveCandidate = async (candidate: Candidate) => {
     try {
       if (candidate.id.startsWith('temp-')) {
-        await apiService.candidates.create(candidate);
+        // Create new candidate
+        const newCandidate = {
+          firstName: candidate.firstName,
+          lastName: candidate.lastName,
+          email: candidate.email,
+          phone: candidate.phone,
+          position: candidate.position,
+          status: candidate.status,
+          cvUrl: candidate.cvUrl,
+          tags: candidate.tags,
+          rating: candidate.rating,
+          assignedTo: candidate.assignedTo,
+          officeId: candidate.officeId
+        };
+        
+        await createCandidate(newCandidate);
       } else {
-        await apiService.candidates.update(candidate.id, candidate);
+        await updateCandidate(candidate.id, candidate);
       }
 
-      refetch();
       setShowDetailModal(false);
       setShowCreateModal(false);
     } catch (error) {
@@ -469,7 +491,7 @@ const CandidatesPage = () => {
         <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
           <Button
             variant="primary"
-            onClick={() => refetch()}
+            onClick={() => fetchCandidates(user?.role === 'super_admin' ? undefined : user?.officeId)}
             leftIcon={<FiRefreshCw className="w-5 h-5" />}
           >
             Try Again

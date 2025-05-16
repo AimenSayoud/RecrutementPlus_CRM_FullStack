@@ -20,73 +20,8 @@ async function apiRequest<T>(
   }
 }
 
-// Mock data
-let mockCandidates: Candidate[] = [
-  {
-    id: `cand-1`,
-    firstName: `Jean`,
-    lastName: `Dupont`,
-    email: `jean.dupont@example.com`,
-    phone: `+33612345678`,
-    position: `Frontend Developer`,
-    status: 'interview' as 'new' | 'interview' | 'offer' | 'hired' | 'rejected',
-    cvUrl: `https://example.com/cv-jean-dupont.pdf`,
-    createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // 7 days ago
-    updatedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 days ago
-    tags: ['JavaScript', 'React', 'TypeScript', 'CSS', 'HTML'],
-    rating: 4,
-    assignedTo: `user-1`,
-    officeId: `1`,
-  },
-  {
-    id: `cand-2`,
-    firstName: `Sarah`,
-    lastName: `Johnson`,
-    email: `sarah.johnson@example.com`,
-    phone: `+14155552671`,
-    position: `UX/UI Designer`,
-    status: 'offer' as 'new' | 'interview' | 'offer' | 'hired' | 'rejected',
-    cvUrl: `https://example.com/cv-sarah-johnson.pdf`,
-    createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000), // 14 days ago
-    updatedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
-    tags: ['Figma', 'Adobe XD', 'UI Design', 'User Research', 'Prototyping'],
-    rating: 5,
-    assignedTo: `user-2`,
-    officeId: `1`,
-  },
-  {
-    id: `cand-3`,
-    firstName: `Michael`,
-    lastName: `Zhang`,
-    email: `michael.zhang@example.com`,
-    phone: `+16502341234`,
-    position: `Backend Developer`,
-    status: 'new' as 'new' | 'interview' | 'offer' | 'hired' | 'rejected',
-    cvUrl: `https://example.com/cv-michael-zhang.pdf`,
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
-    updatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
-    tags: ['Python', 'Django', 'FastAPI', 'PostgreSQL', 'Docker'],
-    rating: 3,
-    assignedTo: `user-3`,
-    officeId: `2`,
-  },
-  ...Array.from({ length: 47 }).map((_, index) => ({
-    id: `cand-${index + 4}`,
-    firstName: `First${index + 4}`,
-    lastName: `Last${index + 4}`,
-    email: `candidate${index + 4}@example.com`,
-    phone: `+1234567890${index % 10}`,
-    position: ['Frontend Developer', 'Backend Developer', 'UI/UX Designer', 'Project Manager', 'DevOps Engineer'][index % 5],
-    status: ['new', 'interview', 'offer', 'hired', 'rejected'][index % 5] as 'new' | 'interview' | 'offer' | 'hired' | 'rejected',
-    cvUrl: index % 3 === 0 ? `https://example.com/cv-${index}.pdf` : undefined,
-    createdAt: new Date(Date.now() - Math.random() * 10000000000),
-    updatedAt: new Date(Date.now() - Math.random() * 5000000000),
-    tags: ['JavaScript', 'React', 'Node.js', 'TypeScript', 'CSS'].slice(0, index % 5 + 1),
-    rating: Math.floor(Math.random() * 5) + 1,
-    assignedTo: index % 4 === 0 ? undefined : `user-${(index % 3) + 1}`,
-    officeId: `${(index % 3) + 1}`,
-  }))
-];
+// Mock data - candidates are now loaded from backend
+let mockCandidates: Candidate[] = [];
 
 let mockCompanies: Company[] = Array.from({ length: 20 }).map((_, index) => ({
   id: `comp-${index + 1}`,
@@ -124,16 +59,49 @@ let mockJobs: Job[] = Array.from({ length: 30 }).map((_, index) => {
   };
 });
 
-const mockUsers: User[] = Array.from({ length: 10 }).map((_, index) => ({
-  id: `user-${index + 1}`,
-  name: `User ${index + 1}`,
-  email: `user${index + 1}@example.com`,
-  role: index === 0 ? 'super_admin' : index < 3 ? 'admin' : 'employee',
-  officeId: `${(index % 3) + 1}`,
-  createdAt: new Date(Date.now() - Math.random() * 10000000000),
-  updatedAt: new Date(Date.now() - Math.random() * 5000000000),
-  lastLogin: new Date(Date.now() - Math.random() * 1000000000),
-}));
+// Create explicit mock users to make debugging easier
+const mockUsers: User[] = [
+  {
+    id: 'user-1',
+    name: 'Admin User',
+    email: 'admin@example.com',
+    role: 'super_admin',
+    officeId: '1',
+    createdAt: new Date(Date.now() - 1000000000),
+    updatedAt: new Date(Date.now() - 500000000),
+    lastLogin: new Date(Date.now() - 100000000),
+  },
+  {
+    id: 'user-2',
+    name: 'Office Manager',
+    email: 'manager@example.com',
+    role: 'admin',
+    officeId: '2',
+    createdAt: new Date(Date.now() - 2000000000),
+    updatedAt: new Date(Date.now() - 1000000000),
+    lastLogin: new Date(Date.now() - 200000000),
+  },
+  {
+    id: 'user-3',
+    name: 'Regular Employee',
+    email: 'employee@example.com',
+    role: 'employee',
+    officeId: '3',
+    createdAt: new Date(Date.now() - 3000000000),
+    updatedAt: new Date(Date.now() - 1500000000),
+    lastLogin: new Date(Date.now() - 300000000),
+  },
+  ...Array.from({ length: 7 }).map((_, index) => ({
+    id: `user-${index + 4}`,
+    name: `User ${index + 4}`,
+    email: `user${index + 4}@example.com`,
+    role: index < 2 ? 'admin' : 'employee' as 'super_admin' | 'admin' | 'employee',
+    officeId: `${(index % 3) + 1}`,
+    createdAt: new Date(Date.now() - Math.random() * 10000000000),
+    updatedAt: new Date(Date.now() - Math.random() * 5000000000),
+    lastLogin: new Date(Date.now() - Math.random() * 1000000000),
+  }))
+];
 
 const mockOffices: Office[] = Array.from({ length: 3 }).map((_, index) => ({
   id: `${index + 1}`,
@@ -220,17 +188,126 @@ export const apiFallback = {
   companies: {
     getAll: (officeId?: string) => 
       apiRequest(async () => {
-        if (officeId) {
-          return mockCompanies.filter(c => c.officeId === officeId);
+        try {
+          console.log('Fetching company_profiles.json...');
+          const response = await fetch('/fake_data/company_profiles.json');
+          
+          if (!response.ok) {
+            console.error('Failed to fetch company_profiles.json:', response.status, response.statusText);
+            throw new Error('Failed to fetch companies data');
+          }
+          
+          const companyProfiles = await response.json();
+          const jobsResponse = await fetch('/fake_data/jobs.json');
+          const jobs = jobsResponse.ok ? await jobsResponse.json() : [];
+          
+          // Create a dictionary of jobs for quick lookup
+          const jobLookup: any = {};
+          jobs.forEach((job: any) => {
+            jobLookup[job.id] = job;
+          });
+          
+          // Format companies to match frontend schema
+          const companies = companyProfiles.map((company: any) => {
+            // Calculate open positions
+            let openPositions = 0;
+            const jobIds = company.job_ids || [];
+            jobIds.forEach((jobId: number) => {
+              const job = jobLookup[jobId];
+              if (job && job.status === 'open') {
+                openPositions += 1;
+              }
+            });
+            
+            return {
+              id: `comp-${company.id}`,
+              name: company.company_name,
+              industry: company.industry,
+              website: company.website || '',
+              contactPerson: company.contact_details.name,
+              contactEmail: company.contact_details.email,
+              contactPhone: company.contact_details.phone || '',
+              address: company.location || '',
+              notes: company.description || '',
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              openPositions: openPositions,
+              officeId: String((company.id % 3) + 1) // Mock office assignment
+            };
+          });
+          
+          if (officeId) {
+            return companies.filter((c: any) => c.officeId === officeId);
+          }
+          
+          return companies;
+        } catch (error) {
+          console.error('Error loading companies:', error);
+          // Fall back to in-memory mock data
+          if (officeId) {
+            return mockCompanies.filter(c => c.officeId === officeId);
+          }
+          return mockCompanies;
         }
-        return mockCompanies;
       }, 'Failed to fetch companies'),
       
     getById: (id: string) => 
       apiRequest(async () => {
-        const company = mockCompanies.find(c => c.id === id);
-        if (!company) throw new Error('Company not found');
-        return company;
+        try {
+          const response = await fetch('/fake_data/company_profiles.json');
+          
+          if (!response.ok) {
+            throw new Error('Failed to fetch companies data');
+          }
+          
+          const companyProfiles = await response.json();
+          const jobsResponse = await fetch('/fake_data/jobs.json');
+          const jobs = jobsResponse.ok ? await jobsResponse.json() : [];
+          
+          // Create a dictionary of jobs for quick lookup
+          const jobLookup: any = {};
+          jobs.forEach((job: any) => {
+            jobLookup[job.id] = job;
+          });
+          
+          // Find the company by ID (remove 'comp-' prefix if present)
+          const numericId = id.startsWith('comp-') ? parseInt(id.replace('comp-', '')) : parseInt(id);
+          const company = companyProfiles.find((c: any) => c.id === numericId);
+          
+          if (!company) throw new Error('Company not found');
+          
+          // Calculate open positions
+          let openPositions = 0;
+          const jobIds = company.job_ids || [];
+          jobIds.forEach((jobId: number) => {
+            const job = jobLookup[jobId];
+            if (job && job.status === 'open') {
+              openPositions += 1;
+            }
+          });
+          
+          return {
+            id: `comp-${company.id}`,
+            name: company.company_name,
+            industry: company.industry,
+            website: company.website || '',
+            contactPerson: company.contact_details.name,
+            contactEmail: company.contact_details.email,
+            contactPhone: company.contact_details.phone || '',
+            address: company.location || '',
+            notes: company.description || '',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            openPositions: openPositions,
+            officeId: String((company.id % 3) + 1)
+          };
+        } catch (error) {
+          console.error('Error loading company:', error);
+          // Fall back to in-memory mock data
+          const company = mockCompanies.find(c => c.id === id);
+          if (!company) throw new Error('Company not found');
+          return company;
+        }
       }, 'Failed to fetch company'),
       
     create: (company: Omit<Company, 'id' | 'createdAt' | 'updatedAt'>) => 
@@ -343,6 +420,67 @@ export const apiFallback = {
         if (!user) throw new Error('User not found');
         return user;
       }, 'Failed to fetch user'),
+    
+    login: (email: string, password: string) => 
+      apiRequest(async () => {
+        // Make a direct fetch request to the users.json file in fake_data
+        try {
+          console.log('Fetching users.json for login...');
+          const response = await fetch('/fake_data/users.json');
+          
+          if (!response.ok) {
+            console.error('Failed to fetch users.json:', response.status, response.statusText);
+            throw new Error('Failed to fetch users data');
+          }
+          
+          const users = await response.json();
+          console.log('Loaded users from JSON file, searching for:', email);
+          
+          // Find user by email
+          const user = users.find((u: any) => u.email === email);
+          
+          if (!user) {
+            console.error('Login failed: No user found with email', email);
+            throw new Error('Invalid credentials');
+          }
+          
+          // For mock data, we won't verify the password hash
+          console.log('Login successful for user:', user.first_name, user.last_name);
+          
+          // Format the user object to match our User type
+          const formattedUser = {
+            id: user.id.toString(),
+            name: `${user.first_name} ${user.last_name}`,
+            email: user.email,
+            role: user.role === 'superadmin' ? 'super_admin' : 
+                 user.role === 'admin' ? 'admin' : 'employee',
+            officeId: '1', // Default office ID
+            createdAt: new Date(user.created_at),
+            updatedAt: new Date(user.updated_at),
+            lastLogin: new Date(user.last_login)
+          };
+          
+          // Generate a mock token
+          const token = `mock_token_${user.id}_${Date.now()}`;
+          
+          return { user: formattedUser, token };
+        } catch (error) {
+          console.error('Error during login:', error);
+          
+          // Fallback to local mock users if fetching users.json fails
+          console.log('Falling back to local mock users...');
+          const user = mockUsers.find(u => u.email === email);
+          
+          if (!user) {
+            console.error('Fallback login failed: No user found with email', email);
+            throw new Error('Invalid credentials');
+          }
+          
+          console.log('Fallback login successful for user:', user.name);
+          const token = `mock_token_${user.id}_${Date.now()}`;
+          return { user, token };
+        }
+      }, 'Failed to login'),
   },
 
   // Skills

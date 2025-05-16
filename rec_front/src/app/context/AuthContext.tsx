@@ -1,18 +1,12 @@
-// src/context/AuthContext.tsx
+// src/app/context/AuthContext.tsx
 'use client';
 
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { User } from '@/types';
+import { apiService } from '@/lib';
 
 export type UserRole = 'super_admin' | 'admin' | 'employee';
-export type OfficeId = '1' | '2' | '3';
-
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  officeId: OfficeId;
-}
+export type OfficeId = string;
 
 interface AuthContextType {
   user: User | null;
@@ -48,23 +42,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     checkAuth();
   }, []);
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     
     try {
-      // For now, simulate a successful login with mock data
-      // Replace with actual API call later
-      const mockUser: User = {
-        id: '1',
-        name: 'Test User',
-        email,
-        role: email.includes('super') ? 'super_admin' : email.includes('admin') ? 'admin' : 'employee',
-        officeId: '1',
-      };
+      // Connect to the real API for login
+      const result = await apiService.users.login(email, password);
       
-      setUser(mockUser);
-      localStorage.setItem('user', JSON.stringify(mockUser));
+      // Store token for API requests
+      localStorage.setItem('auth_token', result.token);
+      
+      // Set the user
+      setUser(result.user);
+      localStorage.setItem('user', JSON.stringify(result.user));
     } catch (error) {
       console.error('Login error:', error);
       throw error;
@@ -76,6 +66,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const logout = () => {
     setUser(null);
     localStorage.removeItem('user');
+    localStorage.removeItem('auth_token');
   };
 
   const canAccessOffice = (officeId: OfficeId) => {

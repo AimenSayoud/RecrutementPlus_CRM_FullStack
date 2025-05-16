@@ -1,18 +1,25 @@
 // src/app/login/page.tsx
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useTheme } from '@/app/context/ThemeContext';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const { login } = useAuth();
+  const { login, user, isLoading, error: authError } = useAuthStore();
   const { colors } = useTheme();
   const router = useRouter();
+  
+  // If user is already logged in, redirect to dashboard
+  useEffect(() => {
+    if (user) {
+      router.push('/dashboard');
+    }
+  }, [user, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,8 +28,8 @@ export default function LoginPage() {
     try {
       await login(email, password);
       router.push('/dashboard');
-    } catch {
-      setError('Invalid email or password');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid email or password');
     }
   };
 
@@ -103,14 +110,15 @@ export default function LoginPage() {
           
           <button
             type="submit"
-            className="w-full py-2 rounded-md font-medium transition-colors hover:bg-blue-600"
+            className={`w-full py-2 rounded-md font-medium transition-colors hover:bg-blue-600 ${isLoading ? 'opacity-75 cursor-not-allowed' : ''}`}
             style={{ 
               backgroundColor: colors.primary,
               color: 'white',
               // Hover effect should be handled via Tailwind CSS or external CSS
             }}
+            disabled={isLoading}
           >
-            Log In
+            {isLoading ? 'Logging in...' : 'Log In'}
           </button>
         </form>
       </div>

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/app/ai-assistant/page.tsx
 'use client';
 
@@ -394,6 +395,7 @@ const AiAssistantPage = () => {
     try {
       const questions = await generatePositionInterviewQuestions("General Role");
       updateLastMessage({ content: questions });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       updateLastMessage({ 
         content: `Error generating interview questions: ${error.message || 'Please try again.'}` 

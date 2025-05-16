@@ -5,8 +5,8 @@ import { Candidate, Company, Job, User, Office } from '@/types';
 
 // Flag to control which API to use - configurable via environment variables
 // Always try to use the backend API first, but fall back to mock data if needed
-const USE_BACKEND = true;
-const FALLBACK_ON_ERROR = true; // Set to false to prevent fallback to mock data
+const USE_BACKEND = true; // Set to true to use the backend first (for login)
+const FALLBACK_ON_ERROR = true; // Set to true to allow fallback to mock data on errors
 
 // Ensure fallback data is always used when requested, regardless of errors
 export const forceFallbackData = () => {
@@ -154,6 +154,12 @@ export const apiCombined = {
         () => api.users.getById(id),
         () => apiFallback.users.getById(id)
       ),
+      
+    login: (email: string, password: string) => 
+      handleAPICall(
+        () => api.users.login(email, password),
+        () => apiFallback.users.login(email, password)
+      ),
   },
 
   // Skills
@@ -177,6 +183,110 @@ export const apiCombined = {
       handleAPICall(
         () => api.offices.getById(id),
         () => apiFallback.offices.getById(id)
+      ),
+  },
+
+  // Team
+  team: {
+    getAll: (officeId?: string, filters?: { type?: string; status?: string }) => 
+      handleAPICall(
+        () => api.team.getAll(officeId, filters),
+        () => apiFallback.team?.getAll(officeId, filters) || [] // Fallback to empty array if not defined
+      ),
+      
+    getById: (id: string) => 
+      handleAPICall(
+        () => api.team.getById(id),
+        () => apiFallback.team?.getById(id) || null
+      ),
+      
+    getByUserId: (userId: string) => 
+      handleAPICall(
+        () => api.team.getByUserId(userId),
+        () => apiFallback.team?.getByUserId(userId) || null
+      ),
+      
+    create: (member: any) => 
+      handleAPICall(
+        () => api.team.create(member),
+        () => apiFallback.team?.create(member) || member
+      ),
+      
+    update: (id: string, updates: any) => 
+      handleAPICall(
+        () => api.team.update(id, updates),
+        () => apiFallback.team?.update(id, updates) || { ...updates, id }
+      ),
+      
+    delete: (id: string) => 
+      handleAPICall(
+        () => api.team.delete(id),
+        () => apiFallback.team?.delete(id) || true
+      ),
+  },
+
+  // Dashboard data
+  dashboard: {
+    getMetrics: (officeId?: string) => 
+      handleAPICall(
+        () => api.dashboard.getMetrics(officeId),
+        // Fallback mock dashboard metrics
+        () => ({
+          openPositions: 24,
+          placements: 76,
+          avgTimeToHire: 32,
+          activeRecruitments: 18,
+          pipelineData: {
+            applied: 45,
+            screening: 28,
+            interview: 16,
+            offer: 8,
+            hired: 4
+          },
+          monthlyData: [
+            { month: 'Jan', newCandidates: 30, hired: 10 },
+            { month: 'Feb', newCandidates: 35, hired: 12 },
+            { month: 'Mar', newCandidates: 45, hired: 15 },
+            { month: 'Apr', newCandidates: 40, hired: 13 },
+            { month: 'May', newCandidates: 50, hired: 18 },
+            { month: 'Jun', newCandidates: 55, hired: 20 }
+          ]
+        })
+      ),
+    
+    getRecentActivity: (officeId?: string) => 
+      handleAPICall(
+        () => api.dashboard.getRecentActivity(officeId),
+        // Fallback mock recent activity
+        () => ([
+          {
+            id: 'act-1',
+            type: 'Interview',
+            name: 'Emma Thompson',
+            position: 'Senior Developer',
+            company: 'TechCorp',
+            time: '10:00 AM',
+            date: new Date(Date.now() + 3600000) // 1 hour from now
+          },
+          {
+            id: 'act-2',
+            type: 'Follow-up',
+            name: 'Michael Rodriguez',
+            position: 'Product Manager',
+            company: 'Innovate Inc.',
+            time: '2:30 PM',
+            date: new Date(Date.now() + 3600000 * 5) // 5 hours from now
+          },
+          {
+            id: 'act-3',
+            type: 'Screening',
+            name: 'Sarah Chen',
+            position: 'UX Designer',
+            company: 'DesignHub',
+            time: '9:15 AM',
+            date: new Date(Date.now() + 86400000) // Tomorrow
+          }
+        ])
       ),
   },
 };
