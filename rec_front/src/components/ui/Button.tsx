@@ -24,6 +24,8 @@ const Button: React.FC<ButtonProps> = ({
   children,
   className = '',
   disabled,
+  onClick,
+  ...rest
 }) => {
   const { colors, theme } = useTheme();
 
@@ -125,6 +127,8 @@ const Button: React.FC<ButtonProps> = ({
       whileTap={tapAnimation}
       initial={{ opacity: 0.9 }}
       animate={{ opacity: 1 }}
+      onClick={onClick}
+      {...rest}
       // Type assertion to fix type conflict with motion.button
     >
       {isLoading && (

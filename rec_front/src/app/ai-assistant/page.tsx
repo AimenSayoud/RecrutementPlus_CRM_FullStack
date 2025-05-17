@@ -5,16 +5,8 @@ import React, { useState, useEffect } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
 import { useAuth } from '@/app/context/AuthContext';
 import { useDataStore } from '@/store/useDataStore';
-import {
-  generateCandidateEmail,
-  generateCompanyEmail,
-  generatePositionInterviewQuestions,
-  generateJobDescriptionService,
-  generateCandidateFeedback,
-  processGeneralQuery,
-  setOpenAIKey,
-  analyzeCv,
-} from '@/lib/openai-service';
+// Import services from new services folder structure
+import { openai } from '@/services';
 
 // Extracted Components
 import ApiKeySettingsModal from '@/components/ai-assistant/ApiKeySettingsModal';
@@ -30,6 +22,7 @@ import { CMD_ANALYZE_CV, CMD_GENERATE_EMAIL, CMD_GENERATE_INTERVIEW_QUESTIONS,
   CMD_OPEN_CHAT, CMD_SEARCH_CANDIDATE, CMD_SEARCH_COMPANY} from '@/components/CommandMenu/types';
 
 import SimpleSearchMenu from '@/components/ui/SimpleSearchMenu';
+import CVAnalyzer from '@/components/CVAnalyzer/CVAnalyzer';
 import { Candidate, Company } from '@/types';
 
 interface Message {
@@ -82,6 +75,7 @@ const AiAssistantPage = () => {
   const [showCandidateSearch, setShowCandidateSearch] = useState(false);
   const [showCompanySearch, setShowCompanySearch] = useState(false);
   const [showApiKeySettings, setShowApiKeySettings] = useState(false);
+  const [showCVAnalyzer, setShowCVAnalyzer] = useState(false);
   
   // Command processor
   const [commandProcessor] = useState(() => new CommandProcessor(
@@ -130,7 +124,7 @@ const AiAssistantPage = () => {
       if (lowerQuery.startsWith('analyze cv') || lowerQuery.startsWith('/analyze_cv')) {
         const cvText = userQuery.replace(/analyze cv/i, '').replace(/\/analyze_cv/i, '').trim();
         if (cvText) {
-          const analysis = await analyzeCv(cvText);
+          const analysis = await openai.resume.analyzeCv(cvText);
           
           // Format the response
           let formattedResponse = `✅ **CV Analysis Complete!**\n\n`;
@@ -173,7 +167,7 @@ const AiAssistantPage = () => {
               ? lowerQuery.replace(/.*email for/i, '').trim() 
               : 'general inquiry';
               
-            return await generateCandidateEmail(
+            return await openai.email.generateCandidateEmail(
               candidate, 
               `Regarding: ${purpose}`, 
               `From AI Assistant query: ${userQuery}`
@@ -181,7 +175,7 @@ const AiAssistantPage = () => {
           }
           
           if (lowerQuery.includes('interview questions')) {
-            return await generatePositionInterviewQuestions(
+            return await openai.interview.generatePositionInterviewQuestions(
               candidate.position, 
               undefined, 
               `For candidate: ${candidate.firstName} ${candidate.lastName}`
@@ -189,11 +183,11 @@ const AiAssistantPage = () => {
           }
           
           if (lowerQuery.includes('feedback')) {
-            return await generateCandidateFeedback(candidate);
+            return await openai.candidate.generateCandidateFeedback(candidate);
           }
           
           // Default for candidate context
-          return await processGeneralQuery(
+          return await openai.chat.processGeneralQuery(
             userQuery, 
             `Context: Candidate - ${entityName}, Position: ${candidate.position}`
           );
@@ -207,7 +201,7 @@ const AiAssistantPage = () => {
               ? lowerQuery.replace(/.*email for/i, '').trim() 
               : 'general inquiry';
               
-            return await generateCompanyEmail(
+            return await openai.email.generateCompanyEmail(
               company, 
               `Regarding: ${purpose}`, 
               `From AI Assistant query: ${userQuery}`
@@ -218,18 +212,18 @@ const AiAssistantPage = () => {
             const positionMatch = lowerQuery.match(/job description for (?:an? )?(.*?) position/i);
             const position = positionMatch?.[1]?.trim() || 'a suitable role';
             
-            return await generateJobDescriptionService(position, company.name, company.industry);
+            return await openai.job.generateJobDescriptionService(position, company.name, company.industry);
           }
           
           if (lowerQuery.includes('interview questions')) {
             const positionMatch = lowerQuery.match(/interview questions for (?:an? )?(.*?) position/i);
             const position = positionMatch?.[1]?.trim() || 'a role';
             
-            return await generatePositionInterviewQuestions(position, company.name);
+            return await openai.interview.generatePositionInterviewQuestions(position, company.name);
           }
           
           // Default for company context
-          return await processGeneralQuery(
+          return await openai.chat.processGeneralQuery(
             userQuery, 
             `Context: Company - ${entityName}, Industry: ${company.industry}`
           );
@@ -242,7 +236,7 @@ const AiAssistantPage = () => {
                              lowerQuery.match(/draft a job description for (?:an? )?(.*?) position/i);
         const position = positionMatch?.[1]?.trim() || 'a generic role';
         
-        return await generateJobDescriptionService(position, 'Your Company (Generic)');
+        return await openai.job.generateJobDescriptionService(position, 'Your Company (Generic)');
       }
       
       if (lowerQuery.includes('interview questions') || lowerQuery.includes('create interview questions')) {
@@ -250,11 +244,11 @@ const AiAssistantPage = () => {
                              lowerQuery.match(/create interview questions for (?:an? )?(.*?) position/i);
         const position = positionMatch?.[1]?.trim() || 'a generic role';
         
-        return await generatePositionInterviewQuestions(position);
+        return await openai.interview.generatePositionInterviewQuestions(position);
       }
 
       // Default to general query processing
-      return await processGeneralQuery(userQuery);
+      return await openai.chat.processGeneralQuery(userQuery);
 
     } catch (error: any) {
       console.error("❌ Error in generateAIResponse:", error);
@@ -312,7 +306,7 @@ const AiAssistantPage = () => {
     });
     
     try {
-      const jd = await generateJobDescriptionService("General Position", "Our Company");
+      const jd = await openai.job.generateJobDescriptionService("General Position", "Our Company");
       updateLastMessage({ content: jd });
     } catch (error: any) {
       updateLastMessage({ 
@@ -334,7 +328,7 @@ const AiAssistantPage = () => {
     });
     
     try {
-      const questions = await generatePositionInterviewQuestions("General Role");
+      const questions = await openai.interview.generatePositionInterviewQuestions("General Role");
       updateLastMessage({ content: questions });
     } catch (error: any) {
       updateLastMessage({ 
@@ -392,10 +386,7 @@ const AiAssistantPage = () => {
     // Handle commands that don't require entities
     if (entityTypeRequired === null) {
       if (commandId === CMD_ANALYZE_CV) {
-        addMessage({ 
-          content: "Understood. Please paste the CV text in the input field below and send it for analysis.", 
-          sender: 'assistant' 
-        });
+        setShowCVAnalyzer(true);
         return; 
       }
       
@@ -486,12 +477,82 @@ const AiAssistantPage = () => {
     setShowCommandMenu(true);
   };
 
+  // Handler for CV Analyzer completion
+  const handleCVAnalysisComplete = async (analysisResults: any, cvText: string) => {
+    setShowCVAnalyzer(false);
+    setIsProcessing(true);
+    
+    // Show loading message first
+    addMessage({ 
+      content: "Processing the CV analysis results...", 
+      sender: 'assistant', 
+      isLoading: true 
+    });
+    
+    try {
+      // Format the response based on the analysis results
+      let formattedResponse = `✅ **CV Analysis Complete!**\n\n`;
+      
+      const analysis = analysisResults.analysis || analysisResults;
+      
+      if (analysis?.summary) formattedResponse += `**Summary:**\n${analysis.summary}\n\n`;
+      if (analysis?.total_experience_years !== undefined) {
+        formattedResponse += `**Total Experience:** ${analysis.total_experience_years} years\n`;
+      }
+      if (analysis?.skills && analysis.skills.length > 0) {
+        formattedResponse += `**Skills:** ${analysis.skills.join(', ')}\n`;
+      }
+      if (analysis?.education && analysis.education.length > 0) {
+        formattedResponse += `**Education:**\n${analysis.education.map((edu: any) => 
+          `  - ${edu.degree || 'N/A'} at ${edu.institution || 'N/A'} (${edu.end_year || 'N/A'})`
+        ).join('\n')}\n`;
+      }
+      if (analysis?.experience && analysis.experience.length > 0) { 
+        formattedResponse += `**Experience:**\n${analysis.experience.map((exp: any) => 
+          `  - ${exp.title || 'N/A'} at ${exp.company || 'N/A'} (${exp.duration || 'N/A'})`
+        ).join('\n')}\n`;
+      }
+      
+      // Add job matches if available
+      if (analysisResults.jobMatches && analysisResults.jobMatches.length > 0) {
+        formattedResponse += `\n**Job Matches:**\n`;
+        analysisResults.jobMatches.forEach((match: any, index: number) => {
+          formattedResponse += `${index + 1}. **${match.job_title}** at ${match.company_name} - Match: ${match.match_score}%\n`;
+          formattedResponse += `   Matching skills: ${match.matching_skills.join(', ')}\n`;
+          if (index < 2) { // Show more details for top matches
+            formattedResponse += `   ${match.match_explanation}\n`;
+            formattedResponse += `   Tip: ${match.improvement_suggestion}\n`;
+          }
+        });
+      }
+      
+      // Update the message with the formatted response
+      updateLastMessage({
+        content: formattedResponse.trim() || "CV Analyzed, but no specific details extracted.",
+      });
+    } catch (error: any) {
+      console.error('❌ Error processing CV analysis results:', error);
+      updateLastMessage({ 
+        content: `Sorry, I encountered an error processing the CV analysis: ${error.message || 'Please try again.'}` 
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col" style={{ backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }}>
       {/* API Key Modal */}
       <ApiKeySettingsModal 
         isOpen={showApiKeySettings} 
         onClose={() => setShowApiKeySettings(false)} 
+      />
+
+      {/* CV Analyzer */}
+      <CVAnalyzer 
+        isOpen={showCVAnalyzer}
+        onClose={() => setShowCVAnalyzer(false)}
+        onAnalysisComplete={handleCVAnalysisComplete}
       />
 
       {/* Command Menu */}

@@ -1,13 +1,25 @@
 import { create } from 'zustand';
-import api, { 
+import { api } from '@/services/api';
+import { 
   CVAnalysisResponse, 
   JobMatchResponseItem, 
   EmailGenerationResponse,
   InterviewQuestionItem,
   JobDescriptionResponse,
   EmailTemplateInfo
-} from '@/lib/api-client';
-import { Candidate, Company } from '@/types';
+} from '@/services/api/types';
+import { 
+  Candidate, 
+  Company,
+  Participant
+} from '@/types';
+
+interface DisplayParticipant {
+  id: string;
+  type: string;
+  name: string;
+  avatar: string | null;
+}
 
 interface DataState {
   // Data
@@ -16,16 +28,23 @@ interface DataState {
   selectedEntity: Candidate | Company | null;
   emailTemplates: EmailTemplateInfo[];
   
+  // Data mapped to UI for selection operations
+  candidatesAsDisplayParticipants: DisplayParticipant[];
+  companiesAsDisplayParticipants: DisplayParticipant[];
+  usersAsDisplayParticipants: DisplayParticipant[];
+  
   // Loading states
   isLoadingCandidates: boolean;
   isLoadingCompanies: boolean;
   isLoadingEmailTemplates: boolean;
+  isLoadingUsers: boolean;
   isProcessingAI: boolean;
   
   // Error states
   candidatesError: string | null;
   companiesError: string | null;
   emailTemplatesError: string | null;
+  usersError: string | null;
   aiError: string | null;
   
   // AI response data
@@ -39,6 +58,7 @@ interface DataState {
   // Regular data fetch functions
   fetchCandidates: (officeId?: string) => Promise<void>;
   fetchCompanies: (officeId?: string) => Promise<void>;
+  fetchUsers: (officeId?: string, roles?: string[]) => Promise<void>;
   fetchEmailTemplates: () => Promise<void>;
   
   // Entity selection functions
@@ -70,17 +90,22 @@ export const useDataStore = create<DataState>((set, get) => ({
   companies: [],
   selectedEntity: null,
   emailTemplates: [],
+  candidatesAsDisplayParticipants: [],
+  companiesAsDisplayParticipants: [],
+  usersAsDisplayParticipants: [],
   
   // Initial loading states
   isLoadingCandidates: false,
   isLoadingCompanies: false,
   isLoadingEmailTemplates: false,
+  isLoadingUsers: false,
   isProcessingAI: false,
   
   // Initial error states
   candidatesError: null,
   companiesError: null,
   emailTemplatesError: null,
+  usersError: null,
   aiError: null,
   
   // Initial AI response data
@@ -93,84 +118,128 @@ export const useDataStore = create<DataState>((set, get) => ({
   
   // Fetch candidates
   fetchCandidates: async (officeId?: string) => {
+    // Prevent duplicate requests
+    const { isLoadingCandidates } = get();
+    if (isLoadingCandidates) return;
+    
     set({ isLoadingCandidates: true, candidatesError: null });
     try {
-      // Mock implementation - in a real app, you'd call your API
-      // const response = await apiClient.get(`/candidates?officeId=${officeId || ''}`);
-      // Simulating API fetch until you connect your actual endpoint
-      const mockCandidates: Candidate[] = [
-        {
-          id: '1', firstName: 'John', lastName: 'Doe', email: 'john@example.com', position: 'Developer',
-          phone: '',
-          status: 'new',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          tags: [],
-          officeId: ''
-        },
-        {
-          id: '2', firstName: 'Jane', lastName: 'Smith', email: 'jane@example.com', position: 'Designer',
-          phone: '',
-          status: 'new',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          tags: [],
-          officeId: ''
-        },
-        // Add more mock data as needed
-      ];
+      // Use the API client to fetch candidates from backend
+      const response = await api.candidates.getAll(officeId);
       
-      // In production, replace with:
-      // const candidates = response.data;
-      const candidates = mockCandidates;
+      // Extract candidates from the paginated response
+      const candidates = response.items;
       
-      set({ candidates, isLoadingCandidates: false });
+      // Convert candidates to DisplayParticipants for entity selection
+      const candidatesAsDisplayParticipants = candidates.map(candidate => ({
+        id: candidate.id,
+        type: 'candidate',
+        name: `${candidate.firstName} ${candidate.lastName}`,
+        avatar: null
+      }));
+      
+      console.log('Fetched candidates from API:', candidates.length);
+      set({ 
+        candidates, 
+        candidatesAsDisplayParticipants,
+        isLoadingCandidates: false 
+      });
     } catch (error) {
       console.error('Error fetching candidates:', error);
+      
+      // Log the error but don't use mock data
+      console.warn('Failed to fetch candidates from API');
+      
       set({ 
         isLoadingCandidates: false, 
-        candidatesError: error instanceof Error ? error.message : 'Failed to fetch candidates' 
+        candidatesError: error instanceof Error ? error.message : 'Failed to fetch candidates',
+        // Set an empty array to prevent further fetch attempts
+        candidatesAsDisplayParticipants: []
       });
     }
   },
   
   // Fetch companies
   fetchCompanies: async (officeId?: string) => {
+    // Prevent duplicate requests
+    const { isLoadingCompanies } = get();
+    if (isLoadingCompanies) return;
+    
     set({ isLoadingCompanies: true, companiesError: null });
     try {
-      // Mock implementation - in a real app, you'd call your API
-      // const response = await apiClient.get(`/companies?officeId=${officeId || ''}`);
-      // Simulating API fetch until you connect your actual endpoint
-      const mockCompanies: Company[] = [
-        {
-          id: '1', name: 'Acme Inc', industry: 'Technology', contactPerson: 'Tom Johnson',
-          contactEmail: '',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          openPositions: 0,
-          officeId: ''
-        },
-        {
-          id: '2', name: 'Globex Corp', industry: 'Finance', contactPerson: 'Sarah Williams',
-          contactEmail: '',
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          openPositions: 0,
-          officeId: ''
-        },
-        // Add more mock data as needed
-      ];
+      // Use the API client to fetch companies from backend
+      const response = await api.companies.getAll(officeId);
       
-      // In production, replace with:
-      // const companies = response.data;
-      const companies = mockCompanies;
+      // Extract companies from the paginated response
+      const companies = response.items;
       
-      set({ companies, isLoadingCompanies: false });
+      // Convert companies to DisplayParticipants for entity selection
+      const companiesAsDisplayParticipants = companies.map(company => ({
+        id: company.id,
+        type: 'employer',
+        name: company.name,
+        avatar: null
+      }));
+      
+      console.log('Fetched companies from API:', companies.length);
+      set({ 
+        companies, 
+        companiesAsDisplayParticipants,
+        isLoadingCompanies: false 
+      });
     } catch (error) {
       console.error('Error fetching companies:', error);
+      
+      // Log the error but don't use mock data
+      console.warn('Failed to fetch companies from API');
+      
       set({ 
         isLoadingCompanies: false, 
-        companiesError: error instanceof Error ? error.message : 'Failed to fetch companies' 
+        companiesError: error instanceof Error ? error.message : 'Failed to fetch companies',
+        // Set an empty array to prevent further fetch attempts
+        companiesAsDisplayParticipants: []
+      });
+    }
+  },
+  
+  // Fetch users (admins and consultants)
+  fetchUsers: async (officeId?: string, roles: string[] = ['admin', 'consultant']) => {
+    // Prevent duplicate requests
+    const { isLoadingUsers } = get();
+    if (isLoadingUsers) return;
+    
+    set({ isLoadingUsers: true, usersError: null });
+    try {
+      // Get the combined roles parameter
+      const response = await api.users.getAll(officeId, roles.join(','));
+      
+      // Extract users from the paginated response
+      const users = response.items;
+      
+      // Convert users to DisplayParticipants for entity selection
+      const usersAsDisplayParticipants = users.map(user => ({
+        id: user.id,
+        type: user.role === 'super_admin' || user.role === 'admin' ? 'admin' : 'consultant',
+        name: user.name,
+        avatar: null
+      }));
+      
+      console.log('Fetched users from API:', users.length);
+      set({ 
+        usersAsDisplayParticipants,
+        isLoadingUsers: false 
+      });
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      
+      // Log the error but don't use mock data
+      console.warn('Failed to fetch users from API');
+      
+      set({ 
+        isLoadingUsers: false, 
+        usersError: error instanceof Error ? error.message : 'Failed to fetch users',
+        // Set an empty array to prevent further fetch attempts
+        usersAsDisplayParticipants: []
       });
     }
   },

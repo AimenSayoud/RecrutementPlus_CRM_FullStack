@@ -1,102 +1,17 @@
-import axios from 'axios';
+// src/services/api/ai-tools-service.ts
+import apiClient from './axios-client';
+import { 
+  CVAnalysisResponse, 
+  JobMatchResponseItem, 
+  EmailGenerationResponse,
+  InterviewQuestionItem,
+  JobDescriptionResponse,
+  ChatCompletionResponse,
+  EmailTemplateInfo 
+} from './types';
 
-// Define base API configuration
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api/v1';
-
-// Create axios instance with default config
-const apiClient = axios.create({
-  baseURL: API_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// Add interceptor for authentication if needed
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('auth_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Type definitions for API responses
-export interface CVAnalysisResponse {
-  skills: string[];
-  education: Array<{
-    degree: string;
-    institution: string;
-    field?: string;
-    start_year?: string;
-    end_year?: string;
-  }>;
-  experience: Array<{
-    title: string;
-    company: string;
-    duration: string;
-    start_date?: string;
-    end_date?: string;
-    current?: boolean;
-    responsibilities?: string[];
-  }>;
-  total_experience_years: number;
-  summary: string;
-  skill_ids?: number[];
-  analysis_method?: string;
-}
-
-export interface JobMatchResponseItem {
-  job_id: number;
-  job_title: string;
-  company_name: string;
-  match_score: number;
-  matching_skills: string[];
-  non_matching_skills: string[];
-  match_explanation: string;
-  improvement_suggestion: string;
-  match_method?: string;
-}
-
-export interface EmailGenerationResponse {
-  subject: string;
-  body: string;
-}
-
-export interface InterviewQuestionItem {
-  question: string;
-  purpose: string;
-  evaluation_guidance: string;
-}
-
-export interface JobDescriptionResponse {
-  title: string;
-  company_overview: string;
-  role_summary: string;
-  key_responsibilities: string[];
-  required_qualifications: string[];
-  preferred_qualifications?: string[];
-  required_skills: string[];
-  benefits?: string[];
-  location_environment?: string;
-  application_process?: string;
-  full_text: string;
-  generation_method?: string;
-}
-
-export interface ChatCompletionResponse {
-  content: string;
-}
-
-export interface EmailTemplateInfo {
-  id: string;
-  name: string;
-  subject: string;
-  description: string;
-  placeholders: string[];
-}
-
-// API functions
-export const api = {
+// AI Tools Service
+export const aiToolsService = {
   // CV Analysis
   analyzeCv: async (cvText: string): Promise<CVAnalysisResponse> => {
     try {
@@ -236,10 +151,9 @@ export const api = {
     }
   },
 
-  // Candidate Feedback (Special endpoint to add)
+  // Candidate Feedback
   generateCandidateFeedback: async (candidate: any): Promise<string> => {
     try {
-      // This requires a new endpoint on the backend
       const response = await apiClient.post('/ai-tools/generate-candidate-feedback', { candidate });
       return response.data.feedback;
     } catch (error) {
@@ -249,4 +163,4 @@ export const api = {
   }
 };
 
-export default api;
+export default aiToolsService;

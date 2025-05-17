@@ -5,7 +5,7 @@ import { useTheme } from '@/app/context/ThemeContext';
 import Input from '@/components/ui/Input';
 import Button from '@/components/ui/Button';
 import { FiKey, FiShield } from 'react-icons/fi';
-import { setOpenAIKey } from '@/lib/openai-service';
+import { openai } from '@/services';
 
 interface ApiKeySettingsModalProps {
   isOpen: boolean;
@@ -18,7 +18,7 @@ const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen, onClo
 
   const handleSaveKey = () => {
     if (apiKeyInput.trim().startsWith('sk-')) {
-      setOpenAIKey(apiKeyInput.trim());
+      openai.setApiKey(apiKeyInput.trim());
       onClose();
     }
   };
