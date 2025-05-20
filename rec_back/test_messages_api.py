@@ -3,7 +3,7 @@ import json
 from pprint import pprint
 
 # Base URL for the API
-BASE_URL = "http://localhost:8000/api/v1"
+BASE_URL = "http://localhost:8080/api/v1"
 
 def test_get_conversations():
     """Test getting conversations for a user"""
