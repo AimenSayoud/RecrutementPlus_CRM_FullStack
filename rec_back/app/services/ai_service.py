@@ -1039,150 +1039,119 @@ Please apply via our careers page or contact HR.
         }
 
 
-# --- Example Usage (Optional) ---
-if __name__ == "__main__":
-    # Create fake data directories/files if they don't exist for basic testing
-    if not DATA_DIR.exists():
-        DATA_DIR.mkdir()
-
-    def create_dummy_json(filepath, content):
-        if not filepath.exists():
+    def generate_candidate_feedback(self, 
+                                candidate_name: str,
+                                position: str,
+                                skills: list = None,
+                                experience: list = None) -> str:
+        """
+        Generates constructive feedback for a candidate based on their profile.
+        
+        Args:
+            candidate_name: The candidate's full name
+            position: The candidate's current or target position
+            skills: Optional list of the candidate's skills
+            experience: Optional list of the candidate's experience
+            
+        Returns:
+            String containing formatted candidate feedback
+        """
+        task_key = "candidate_feedback"  # Add this to your system_prompts dict
+        
+        # Add this to your system_prompts if not already there
+        if "candidate_feedback" not in self.system_prompts:
+            self.system_prompts["candidate_feedback"] = """You are an expert recruitment consultant providing thoughtful, 
+            constructive feedback to candidates. Your feedback is balanced, highlighting genuine strengths while offering 
+            constructive areas for improvement. You avoid generic feedback and provide specific, actionable advice."""
+        
+        # Prepare context
+        skills_str = ", ".join(skills) if skills and len(skills) > 0 else "Unknown"
+        experience_str = ""
+        if experience and len(experience) > 0:
+            experience_items = []
+            for exp in experience:
+                if isinstance(exp, dict):
+                    title = exp.get('title', 'Unknown role')
+                    company = exp.get('company', 'Unknown company')
+                    duration = exp.get('duration', 'Unknown duration')
+                    experience_items.append(f"{title} at {company} ({duration})")
+            
+            experience_str = "\n- " + "\n- ".join(experience_items) if experience_items else "Unknown"
+        
+        # Format user prompt
+        user_prompt = f"""
+        Please provide constructive feedback for {candidate_name}, who is a {position}.
+        
+        CANDIDATE PROFILE:
+        - Skills: {skills_str}
+        - Experience: {experience_str}
+        
+        Structure your feedback in these sections:
+        1. Strengths: Positive aspects of their profile
+        2. Areas for Growth: Constructive areas for improvement
+        3. Recommendations: Specific, actionable next steps
+        4. Overall Assessment: Brief summary of their overall profile
+        
+        Keep your feedback constructive, specific, and actionable. Avoid generic statements.
+        """
+        
+        # Call OpenAI API
+        if self.client:
             try:
-                with open(filepath, "w") as f:
-                    json.dump(content, f, indent=2)
-                logger.info(f"Created dummy file: {filepath}")
+                response = self._call_openai_api(
+                    task_key=task_key,
+                    user_prompt=user_prompt,
+                    temperature=0.7,
+                    response_format=None  # We want a text response, not JSON
+                )
+                
+                # If it's successful and returned as a dict with content key
+                if isinstance(response, dict) and "content" in response:
+                    return response["content"]
+                    
+                # If it's returned as plain text
+                if isinstance(response, str):
+                    return response
+                    
+                # If it's in some other format
+                feedback_text = str(response)
+                if not feedback_text:
+                    logger.warning("OpenAI returned empty or invalid feedback content")
+                    return self._generate_basic_feedback(candidate_name, position, skills)
+                    
+                return feedback_text
+                
             except Exception as e:
-                 logger.error(f"Failed to create dummy file {filepath}: {e}")
-
-
-    create_dummy_json(JOBS_FILE, [{"id": 1, "title": "Software Engineer", "employer_id": 101, "skills": [1, 2], "posting_date": "2024-01-15", "required_experience_years": 2, "description": "Develop amazing software."}])
-    create_dummy_json(EMAIL_TEMPLATES_FILE, [{"id": "candidate_rejection", "subject": "Update on your application for {{job_title}}", "template": "Dear {{candidate_name}},\nThank you for your interest... Unfortunately...\n\nMatching Skills:\n{{matching_skills}}", "purpose": "Inform candidate about rejection"}])
-    create_dummy_json(CANDIDATES_FILE, [{"id": 1, "name": "Jane Doe"}])
-    create_dummy_json(USERS_FILE, [{"id": 1, "name": "Admin User"}])
-    create_dummy_json(EMPLOYERS_FILE, [{"id": 101, "company_name": "Tech Solutions Inc."}])
-    create_dummy_json(SKILLS_FILE, [{"id": 1, "name": "Python"}, {"id": 2, "name": "SQL"}, {"id": 3, "name": "Communication"}])
-
-
-    # --- Initialize Service ---
-    ai_service = AIService()
-
-    # --- Test CV Analysis ---
-    print("\n--- Testing CV Analysis ---")
-    sample_cv = """
-    John Doe
-    john.doe@email.com | 555-1234
-
-    SUMMARY
-    Highly motivated Software Engineer with 5 years of experience in Python development and cloud technologies. Proven ability to deliver high-quality code and work effectively in Agile teams. Seeking a challenging role at a forward-thinking company.
-
-    SKILLS
-    Python, Java, SQL, NoSQL, AWS, Docker, Kubernetes, Git, Agile, Communication, Problem Solving
-
-    WORK EXPERIENCE
-    Senior Software Engineer | Tech Innovations Inc. | Jan 2021 - Present
-    - Developed backend services using Python and Flask.
-    - Managed AWS infrastructure (EC2, S3, RDS).
-    - Led a team of 3 junior engineers.
-
-    Software Engineer | Web Solutions Co. | Jun 2019 - Dec 2020
-    - Built web applications using JavaScript and React.
-    - Worked with PostgreSQL databases.
-
-    EDUCATION
-    Master of Science in Computer Science | State University | 2017 - 2019
-    Bachelor of Science in Software Engineering | Tech College | 2013 - 2017
-    """
-    if ai_service.client:
-        cv_analysis_result = ai_service.analyze_cv_with_openai(sample_cv)
-        print("CV Analysis Result (OpenAI):")
-        print(json.dumps(cv_analysis_result, indent=2))
-    else:
-        cv_analysis_result = ai_service.analyze_cv_fallback(sample_cv)
-        print("CV Analysis Result (Fallback):")
-        print(json.dumps(cv_analysis_result, indent=2))
-
-
-    # --- Test Job Matching ---
-    print("\n--- Testing Job Matching ---")
-    # Use the result from CV analysis
-    if cv_analysis_result:
-        if ai_service.client:
-            job_matches = ai_service.match_jobs_with_openai(cv_analysis_result)
-            print("Job Matching Result (OpenAI):")
-            print(json.dumps(job_matches, indent=2))
+                logger.error(f"Error generating candidate feedback with OpenAI: {e}")
+                # Fall back to basic feedback
+                return self._generate_basic_feedback(candidate_name, position, skills)
         else:
-            job_matches = ai_service.match_jobs_fallback(
-                skills=cv_analysis_result.get("skills", []),
-                experience_years=cv_analysis_result.get("total_experience_years", 0)
-            )
-            print("Job Matching Result (Fallback):")
-            print(json.dumps(job_matches, indent=2))
-
-
-    # --- Test Email Generation ---
-    print("\n--- Testing Email Generation ---")
-    email_context = {
-        "candidate_name": "Jane Applicant",
-        "job_title": "Software Engineer",
-        "company_name": "Tech Solutions Inc.",
-        "matching_skills": ["Python", "SQL"] # Example skills
-    }
-    if ai_service.client:
-        email_result = ai_service.generate_email_with_openai("candidate_rejection", email_context)
-        print("Email Generation Result (OpenAI):")
-        print(f"Subject: {email_result['subject']}")
-        print(f"Body:\n{email_result['body']}")
-    else:
-        # Fallback test requires the template to exist
-        template_exists = "candidate_rejection" in ai_service.email_templates
-        if template_exists:
-             email_result = ai_service.generate_email_with_openai("candidate_rejection", email_context) # Will use fallback
-             print("Email Generation Result (Fallback):")
-             print(f"Subject: {email_result['subject']}")
-             print(f"Body:\n{email_result['body']}")
-        else:
-             print("Skipping fallback email test: 'candidate_rejection' template not loaded.")
-
-
-    # --- Test Interview Question Generation ---
-    print("\n--- Testing Interview Question Generation ---")
-    job_details_example = {
-        "title": "Senior Python Developer",
-        "company_name": "Cloud Services Ltd.",
-        "description": "Seeking an experienced Python developer to build scalable cloud applications.",
-        "skills": ["Python", "AWS", "Flask/Django", "Microservices", "SQL"],
-        "requirements": ["5+ years Python experience", "Experience with cloud platforms (AWS preferred)", "Strong understanding of REST APIs"]
-    }
-    candidate_example = cv_analysis_result # Use previous analysis if available
-
-    if ai_service.client:
-        interview_questions = ai_service.generate_interview_questions(job_details_example, candidate_example)
-        print("Interview Questions (OpenAI):")
-        print(json.dumps(interview_questions, indent=2))
-    else:
-        interview_questions = ai_service._generate_basic_interview_questions(job_details_example["title"])
-        print("Interview Questions (Fallback):")
-        print(json.dumps(interview_questions, indent=2))
-
-
-    # --- Test Job Description Generation ---
-    print("\n--- Testing Job Description Generation ---")
-    if ai_service.client:
-        jd_result = ai_service.generate_job_description(
-            position="Data Scientist",
-            company_name="AI Insights Corp",
-            industry="Artificial Intelligence",
-            required_skills=["Python", "Machine Learning", "SQL", "Statistics"]
-        )
-        print("Job Description (OpenAI):")
-        # print(json.dumps(jd_result, indent=2)) # Print structured
-        print(jd_result.get("full_text", "Full text not generated.")) # Print full text
-    else:
-         jd_result = ai_service._generate_basic_job_description(
-             position="Data Scientist",
-             company_name="AI Insights Corp",
-             industry="Artificial Intelligence"
-         )
-         print("Job Description (Fallback):")
-         print(jd_result.get("full_text", "Full text not generated."))
-
+            logger.warning("OpenAI client not available. Using fallback for candidate feedback.")
+            return self._generate_basic_feedback(candidate_name, position, skills)
+            
+    def _generate_basic_feedback(self, candidate_name: str, position: str, skills: list = None) -> str:
+        """Generate basic feedback when OpenAI is unavailable"""
+        skills_str = ", ".join(skills) if skills and len(skills) > 0 else "various skills"
+        
+        return f"""
+        # Feedback for {candidate_name}
+        
+        ## Strengths
+        - Shows expertise in {skills_str}
+        - Has experience in the {position} role
+        - Demonstrates professional qualifications
+        
+        ## Areas for Growth
+        - Could benefit from expanding experience in emerging technologies
+        - May want to consider developing additional leadership skills
+        - Continued professional development would strengthen the profile
+        
+        ## Recommendations
+        - Consider additional certifications relevant to {position}
+        - Build a portfolio showcasing successful projects
+        - Network with industry professionals to expand opportunities
+        
+        ## Overall Assessment
+        {candidate_name} appears to be a qualified professional with experience as a {position}. 
+        With continued focus on skill development and professional growth, they have good potential for career advancement.
+        """

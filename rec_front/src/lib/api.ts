@@ -1,28 +1,41 @@
 // src/lib/api.ts
-import { Candidate, Company, Job, User, Office } from '@/types';
-import { apiFallback } from './api-fallback';
+import { 
+  Candidate, 
+  Company, 
+  Job, 
+  User, 
+  Office, 
+  Skill,
+  Conversation,
+  ConversationWithMessages,
+  Message,
+  CreateMessageDto,
+  CreateConversationDto,
+  UnreadCount
+} from '@/types';
 
 // API base URL from environment variables
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true';
-
-// Helper function to determine if we should use mock data
-const shouldUseMockData = () => {
-  return USE_MOCK_DATA || typeof window === 'undefined';
-}
 
 // Helper function to handle API responses
 const handleResponse = async (response: Response) => {
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || 'An error occurred');
+  // Handle redirects (307, 301, 302, etc.)
+  if (response.redirected) {
+    console.warn(`API request redirected from ${response.url}`);
   }
+  
+  if (!response.ok) {
+    // For redirects, provide a more specific error message
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error(`Redirect error: ${response.status} ${response.statusText}`);
+    }
+    
+    // For other errors, try to parse the response body
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Error ${response.status}: ${response.statusText}`);
+  }
+  
   return response.json();
-};
-
-// Helper function to format date objects
-const formatDate = (dateStr: string): Date => {
-  return new Date(dateStr);
 };
 
 // Generic fetcher function
@@ -32,39 +45,185 @@ const fetcher = async <T>(
 ): Promise<T> => {
   try {
     const url = `${API_BASE_URL}${endpoint}`;
+    
+    // Add cache control headers to prevent caching of API responses
+    const headers = {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      ...options.headers,
+    };
+    
+    // Set maximum timeout for requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
     const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
+      headers,
       ...options,
+      signal: controller.signal,
     });
+    
+    clearTimeout(timeoutId);
     
     return handleResponse(response);
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      console.error('API request timed out');
+      throw new Error('Request timed out. Please try again.');
+    }
     console.error('API Error:', error);
     throw error;
   }
 };
 
+// Helper to extract items from paginated responses
+const extractPaginatedItems = <T>(response: { items: T[], totalCount: number, page: number, pageSize: number, pageCount: number }): T[] => {
+  return response.items;
+};
+
 // API Service
 export const api = {
+  // Messages and Conversations
+  messages: {
+    getConversations: async (userId: string, skip = 0, limit = 100) => {
+      try {
+        const response = await fetcher<Conversation[]>(`/api/v1/messages/conversations?user_id=${userId}&skip=${skip}&limit=${limit}`);
+        return response;
+      } catch (error) {
+        console.error('Failed to fetch conversations:', error);
+        throw error;
+      }
+    },
+    
+    getConversation: async (conversationId: string) => {
+      try {
+        const response = await fetcher<ConversationWithMessages>(`/api/v1/messages/conversations/${conversationId}`);
+        return response;
+      } catch (error) {
+        console.error('Failed to fetch conversation:', error);
+        throw error;
+      }
+    },
+    
+    createConversation: async (data: CreateConversationDto) => {
+      try {
+        const response = await fetcher<Conversation>('/api/v1/messages/conversations/', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+        return response;
+      } catch (error) {
+        console.error('Failed to create conversation:', error);
+        throw error;
+      }
+    },
+    
+    getMessages: async (params: {
+      conversation_id?: string;
+      user_id?: string;
+      skip?: number;
+      limit?: number;
+    }) => {
+      try {
+        let query = '/api/v1/messages/messages?';
+        
+        if (params.conversation_id) {
+          query += `conversation_id=${params.conversation_id}&`;
+        }
+        
+        if (params.user_id) {
+          query += `user_id=${params.user_id}&`;
+        }
+        
+        if (params.skip !== undefined) {
+          query += `skip=${params.skip}&`;
+        }
+        
+        if (params.limit !== undefined) {
+          query += `limit=${params.limit}&`;
+        }
+        
+        const response = await fetcher<Message[]>(query);
+        return response;
+      } catch (error) {
+        console.error('Failed to fetch messages:', error);
+        throw error;
+      }
+    },
+    
+    createMessage: async (data: CreateMessageDto) => {
+      try {
+        const response = await fetcher<Message>('/api/v1/messages/messages/', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+        return response;
+      } catch (error) {
+        console.error('Failed to create message:', error);
+        throw error;
+      }
+    },
+    
+    markMessageAsRead: async (messageId: string, userId: string) => {
+      try {
+        const response = await fetcher<Message>(`/api/v1/messages/messages/${messageId}/read?user_id=${userId}`, {
+          method: 'PUT',
+        });
+        return response;
+      } catch (error) {
+        console.error('Failed to mark message as read:', error);
+        throw error;
+      }
+    },
+    
+    getUnreadCount: async (userId: string) => {
+      try {
+        const response = await fetcher<UnreadCount>(`/api/v1/messages/messages/unread/count?user_id=${userId}`);
+        return response.count;
+      } catch (error) {
+        console.error('Failed to get unread count:', error);
+        throw error;
+      }
+    },
+  },
+  
   // Candidates
   candidates: {
-    getAll: async (officeId?: string) => {
+    getAll: async (officeId?: string, search?: string, skill?: string, status?: string, page = 1, limit = 50) => {
       try {
-        const endpoint = officeId 
-          ? `/api/v1/candidates?office_id=${officeId}`
-          : '/api/v1/candidates';
+        let endpoint = '/api/v1/candidates?';
         
-        const candidates = await fetcher<Candidate[]>(endpoint);
+        if (officeId) endpoint += `office_id=${officeId}&`;
+        if (search) endpoint += `search=${encodeURIComponent(search)}&`;
+        if (skill) endpoint += `skill=${encodeURIComponent(skill)}&`;
+        if (status) endpoint += `status=${status}&`;
+        
+        endpoint += `skip=${(page - 1) * limit}&limit=${limit}`;
+        
+        const response = await fetcher<{
+          items: Candidate[],
+          totalCount: number,
+          page: number,
+          pageSize: number,
+          pageCount: number
+        }>(endpoint);
         
         // Ensure all date fields are properly converted to Date objects
-        return candidates.map(candidate => ({
+        const candidates = response.items.map(candidate => ({
           ...candidate,
           createdAt: candidate.createdAt instanceof Date ? candidate.createdAt : new Date(candidate.createdAt),
           updatedAt: candidate.updatedAt instanceof Date ? candidate.updatedAt : new Date(candidate.updatedAt),
         }));
+        
+        return {
+          items: candidates,
+          totalCount: response.totalCount,
+          page: response.page,
+          pageSize: response.pageSize,
+          pageCount: response.pageCount
+        };
       } catch (error) {
         console.error('Failed to fetch candidates:', error);
         throw error;
@@ -138,19 +297,39 @@ export const api = {
   
   // Companies
   companies: {
-    getAll: async (officeId?: string) => {
+    getAll: async (officeId?: string, industry?: string, search?: string, hasOpenPositions?: boolean, page = 1, limit = 50) => {
       try {
-        const endpoint = officeId 
-          ? `/api/v1/companies?office_id=${officeId}`
-          : '/api/v1/companies';
+        let endpoint = '/api/v1/companies?';
         
-        const companies = await fetcher<Company[]>(endpoint);
+        if (officeId) endpoint += `office_id=${officeId}&`;
+        if (industry) endpoint += `industry=${encodeURIComponent(industry)}&`;
+        if (search) endpoint += `search=${encodeURIComponent(search)}&`;
+        if (hasOpenPositions !== undefined) endpoint += `has_open_positions=${hasOpenPositions}&`;
         
-        return companies.map(company => ({
+        endpoint += `skip=${(page - 1) * limit}&limit=${limit}`;
+        
+        const response = await fetcher<{
+          items: Company[],
+          totalCount: number,
+          page: number,
+          pageSize: number,
+          pageCount: number
+        }>(endpoint);
+        
+        // Ensure all date fields are properly converted to Date objects
+        const companies = response.items.map(company => ({
           ...company,
           createdAt: company.createdAt instanceof Date ? company.createdAt : new Date(company.createdAt),
           updatedAt: company.updatedAt instanceof Date ? company.updatedAt : new Date(company.updatedAt),
         }));
+        
+        return {
+          items: companies,
+          totalCount: response.totalCount,
+          page: response.page,
+          pageSize: response.pageSize,
+          pageCount: response.pageCount
+        };
       } catch (error) {
         console.error('Failed to fetch companies:', error);
         throw error;
@@ -168,6 +347,28 @@ export const api = {
         };
       } catch (error) {
         console.error('Failed to fetch company:', error);
+        throw error;
+      }
+    },
+    
+    getJobsByCompany: async (companyId: string) => {
+      try {
+        const response = await fetcher<{ jobs: Job[], total: number }>(`/api/v1/companies/${companyId}/jobs`);
+        
+        // Ensure all date fields are properly converted to Date objects
+        const jobs = response.jobs.map(job => ({
+          ...job,
+          createdAt: job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt),
+          updatedAt: job.updatedAt instanceof Date ? job.updatedAt : new Date(job.updatedAt),
+          deadline: job.deadline ? (job.deadline instanceof Date ? job.deadline : new Date(job.deadline)) : undefined,
+        }));
+        
+        return {
+          jobs,
+          total: response.total
+        };
+      } catch (error) {
+        console.error('Failed to fetch company jobs:', error);
         throw error;
       }
     },
@@ -224,20 +425,42 @@ export const api = {
   
   // Jobs
   jobs: {
-    getAll: async (officeId?: string) => {
+    getAll: async (officeId?: string, companyId?: string, status?: string, skill?: string, search?: string, page = 1, limit = 50) => {
       try {
-        const endpoint = officeId 
-          ? `/api/v1/jobs?office_id=${officeId}`
-          : '/api/v1/jobs';
+        let endpoint = '/api/v1/jobs?';
         
-        const jobs = await fetcher<Job[]>(endpoint);
+        if (officeId) endpoint += `office_id=${officeId}&`;
+        if (companyId) endpoint += `company_id=${companyId}&`;
+        if (status) endpoint += `status=${status}&`;
+        if (skill) endpoint += `skill=${encodeURIComponent(skill)}&`;
+        if (search) endpoint += `search=${encodeURIComponent(search)}&`;
         
-        return jobs.map(job => ({
+        endpoint += `skip=${(page - 1) * limit}&limit=${limit}`;
+        
+        const response = await fetcher<{
+          items: Job[],
+          totalCount: number,
+          page: number,
+          pageSize: number,
+          pageCount: number
+        }>(endpoint);
+        
+        // Ensure all date fields are properly converted to Date objects
+        const jobs = response.items.map(job => ({
           ...job,
           createdAt: job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt),
           updatedAt: job.updatedAt instanceof Date ? job.updatedAt : new Date(job.updatedAt),
           deadline: job.deadline ? (job.deadline instanceof Date ? job.deadline : new Date(job.deadline)) : undefined,
+          postedAt: job.postedAt ? (job.postedAt instanceof Date ? job.postedAt : new Date(job.postedAt)) : undefined,
         }));
+        
+        return {
+          items: jobs,
+          totalCount: response.totalCount,
+          page: response.page,
+          pageSize: response.pageSize,
+          pageCount: response.pageCount
+        };
       } catch (error) {
         console.error('Failed to fetch jobs:', error);
         throw error;
@@ -253,6 +476,7 @@ export const api = {
           createdAt: job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt),
           updatedAt: job.updatedAt instanceof Date ? job.updatedAt : new Date(job.updatedAt),
           deadline: job.deadline ? (job.deadline instanceof Date ? job.deadline : new Date(job.deadline)) : undefined,
+          postedAt: job.postedAt ? (job.postedAt instanceof Date ? job.postedAt : new Date(job.postedAt)) : undefined,
         };
       } catch (error) {
         console.error('Failed to fetch job:', error);
@@ -262,13 +486,14 @@ export const api = {
       
     getByCompany: async (companyId: string) => {
       try {
-        const jobs = await fetcher<Job[]>(`/api/v1/jobs/company/${companyId}`);
+        const jobs = await fetcher<Job[]>(`/api/v1/companies/${companyId}/jobs`);
         
         return jobs.map(job => ({
           ...job,
           createdAt: job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt),
           updatedAt: job.updatedAt instanceof Date ? job.updatedAt : new Date(job.updatedAt),
           deadline: job.deadline ? (job.deadline instanceof Date ? job.deadline : new Date(job.deadline)) : undefined,
+          postedAt: job.postedAt ? (job.postedAt instanceof Date ? job.postedAt : new Date(job.postedAt)) : undefined,
         }));
       } catch (error) {
         console.error('Failed to fetch company jobs:', error);
@@ -288,6 +513,7 @@ export const api = {
           createdAt: newJob.createdAt instanceof Date ? newJob.createdAt : new Date(newJob.createdAt),
           updatedAt: newJob.updatedAt instanceof Date ? newJob.updatedAt : new Date(newJob.updatedAt),
           deadline: newJob.deadline ? (newJob.deadline instanceof Date ? newJob.deadline : new Date(newJob.deadline)) : undefined,
+          postedAt: newJob.postedAt ? (newJob.postedAt instanceof Date ? newJob.postedAt : new Date(newJob.postedAt)) : undefined,
         };
       } catch (error) {
         console.error('Failed to create job:', error);
@@ -307,6 +533,7 @@ export const api = {
           createdAt: updatedJob.createdAt instanceof Date ? updatedJob.createdAt : new Date(updatedJob.createdAt),
           updatedAt: updatedJob.updatedAt instanceof Date ? updatedJob.updatedAt : new Date(updatedJob.updatedAt),
           deadline: updatedJob.deadline ? (updatedJob.deadline instanceof Date ? updatedJob.deadline : new Date(updatedJob.deadline)) : undefined,
+          postedAt: updatedJob.postedAt ? (updatedJob.postedAt instanceof Date ? updatedJob.postedAt : new Date(updatedJob.postedAt)) : undefined,
         };
       } catch (error) {
         console.error('Failed to update job:', error);
@@ -330,20 +557,40 @@ export const api = {
   
   // Users
   users: {
-    getAll: async (officeId?: string) => {
+    getAll: async (officeId?: string, role?: string, search?: string, active?: boolean, page = 1, limit = 50) => {
       try {
-        const endpoint = officeId 
-          ? `/api/v1/users?office_id=${officeId}`
-          : '/api/v1/users';
+        let endpoint = '/api/v1/users?';
         
-        const users = await fetcher<User[]>(endpoint);
+        if (officeId) endpoint += `office_id=${officeId}&`;
+        if (role) endpoint += `role=${role}&`;
+        if (search) endpoint += `search=${encodeURIComponent(search)}&`;
+        if (active !== undefined) endpoint += `active=${active}&`;
         
-        return users.map(user => ({
+        endpoint += `skip=${(page - 1) * limit}&limit=${limit}`;
+        
+        const response = await fetcher<{
+          items: User[],
+          totalCount: number,
+          page: number,
+          pageSize: number,
+          pageCount: number
+        }>(endpoint);
+        
+        // Ensure all date fields are properly converted to Date objects
+        const users = response.items.map(user => ({
           ...user,
           createdAt: user.createdAt instanceof Date ? user.createdAt : new Date(user.createdAt),
           updatedAt: user.updatedAt instanceof Date ? user.updatedAt : new Date(user.updatedAt),
           lastLogin: user.lastLogin ? (user.lastLogin instanceof Date ? user.lastLogin : new Date(user.lastLogin)) : undefined,
         }));
+        
+        return {
+          items: users,
+          totalCount: response.totalCount,
+          page: response.page,
+          pageSize: response.pageSize,
+          pageCount: response.pageCount
+        };
       } catch (error) {
         console.error('Failed to fetch users:', error);
         throw error;
@@ -365,18 +612,89 @@ export const api = {
         throw error;
       }
     },
+    
+    login: async (email: string, password: string) => {
+      try {
+        const response = await fetcher<{
+          user: User,
+          token: string,
+          tokenExpiry: number
+        }>('/api/v1/users/login', {
+          method: 'POST',
+          body: JSON.stringify({ email, password }),
+        });
+        
+        // Store token in localStorage
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('auth_token', response.token);
+          localStorage.setItem('auth_expiry', response.tokenExpiry.toString());
+        }
+        
+        return {
+          user: {
+            ...response.user,
+            createdAt: response.user.createdAt instanceof Date ? response.user.createdAt : new Date(response.user.createdAt),
+            updatedAt: response.user.updatedAt instanceof Date ? response.user.updatedAt : new Date(response.user.updatedAt),
+            lastLogin: response.user.lastLogin ? (response.user.lastLogin instanceof Date ? response.user.lastLogin : new Date(response.user.lastLogin)) : undefined,
+          },
+          token: response.token,
+          tokenExpiry: response.tokenExpiry
+        };
+      } catch (error) {
+        console.error('Failed to login:', error);
+        throw error;
+      }
+    },
+    
+    logout: () => {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_expiry');
+      }
+      return Promise.resolve(true);
+    }
   },
   
   // Skills
   skills: {
-    getAll: async () => {
+    getAll: async (category?: string, search?: string, page = 1, limit = 100) => {
       try {
-        return await fetcher<{ id: number, name: string }[]>('/api/v1/skills');
+        let endpoint = '/api/v1/skills?';
+        
+        if (category) endpoint += `category=${encodeURIComponent(category)}&`;
+        if (search) endpoint += `search=${encodeURIComponent(search)}&`;
+        
+        endpoint += `skip=${(page - 1) * limit}&limit=${limit}`;
+        
+        const response = await fetcher<{
+          items: Skill[],
+          totalCount: number,
+          page: number,
+          pageSize: number,
+          pageCount: number
+        }>(endpoint);
+        
+        return {
+          items: response.items,
+          totalCount: response.totalCount,
+          page: response.page,
+          pageSize: response.pageSize,
+          pageCount: response.pageCount
+        };
       } catch (error) {
         console.error('Failed to fetch skills:', error);
         throw error;
       }
     },
+    
+    getById: async (id: string) => {
+      try {
+        return await fetcher<Skill>(`/api/v1/skills/${id}`);
+      } catch (error) {
+        console.error('Failed to fetch skill:', error);
+        throw error;
+      }
+    }
   },
   
   // Offices
@@ -392,7 +710,36 @@ export const api = {
         }));
       } catch (error) {
         console.error('Failed to fetch offices:', error);
-        throw error;
+        // For now, return mock offices since the backend endpoint doesn't exist yet
+        return [
+          {
+            id: '1',
+            name: 'Paris Office',
+            location: 'Paris, France',
+            contactEmail: 'paris@recruitmentplus.com',
+            contactPhone: '+33145678901',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            id: '2',
+            name: 'Lyon Office',
+            location: 'Lyon, France',
+            contactEmail: 'lyon@recruitmentplus.com',
+            contactPhone: '+33478901234',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          {
+            id: '3',
+            name: 'Marseille Office',
+            location: 'Marseille, France',
+            contactEmail: 'marseille@recruitmentplus.com',
+            contactPhone: '+33491234567',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }
+        ];
       }
     },
       
@@ -407,7 +754,16 @@ export const api = {
         };
       } catch (error) {
         console.error('Failed to fetch office:', error);
-        throw error;
+        // Return a mock office since the backend endpoint doesn't exist yet
+        return {
+          id,
+          name: `Office ${id}`,
+          location: ['Paris, France', 'Lyon, France', 'Marseille, France'][parseInt(id) % 3],
+          contactEmail: `office${id}@recruitmentplus.com`,
+          contactPhone: '+33123456789',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
       }
     },
   },

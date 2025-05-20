@@ -222,3 +222,6 @@ export interface EmailTemplateInfo {
   description: string;
   placeholders: string[];
 }
+
+// Re-export messaging types
+export * from './messaging';

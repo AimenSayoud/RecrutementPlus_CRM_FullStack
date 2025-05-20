@@ -5,6 +5,12 @@ from typing import List, Optional, Dict, Any, Union
 class CVAnalysisRequest(BaseModel):
     cv_text: str
 
+class CandidateFeedbackRequest(BaseModel):
+    candidate: Dict[str, Any]
+
+class CandidateFeedbackResponse(BaseModel):
+    feedback: str
+
 class EducationEntry(BaseModel):
     degree: Optional[str] = None
     institution: Optional[str] = None

@@ -1,34 +1,29 @@
 // src/app/ai-assistant/page.tsx
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
 import { useAuth } from '@/app/context/AuthContext';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useDataStore } from '@/store/useDataStore';
-import {
-  generateCandidateEmail,
-  generateCompanyEmail,
-  generatePositionInterviewQuestions,
-  generateJobDescriptionService,
-  generateCandidateFeedback,
-  processGeneralQuery,
-  setOpenAIKey,
-  analyzeCv,
-} from '@/lib/openai-service';
-import { Candidate, Company } from '@/types';
+// Import services from new services folder structure
+import { openai } from '@/services';
+
+// Extracted Components
+import ApiKeySettingsModal from '@/components/ai-assistant/ApiKeySettingsModal';
+import ChatHeader from '@/components/ai-assistant/ChatHeader';
+import ChatMessageList from '@/components/ai-assistant/ChatMessageList';
+import ChatInput from '@/components/ai-assistant/ChatInput';
+import CommandProcessor from '@/components/ai-assistant/CommandProcessor';
 
 // UI Components
-import { CommandMenu, CMD_ANALYZE_CV, CMD_GENERATE_EMAIL, CMD_GENERATE_INTERVIEW_QUESTIONS, 
+import { CommandMenu} from '@/components/CommandMenu/';
+import { CMD_ANALYZE_CV, CMD_GENERATE_EMAIL, CMD_GENERATE_INTERVIEW_QUESTIONS, 
   CMD_GENERATE_JOB_DESCRIPTION, CMD_GENERATE_CANDIDATE_FEEDBACK, CMD_GENERATE_SUGGESTIONS,
-  CMD_OPEN_CHAT, CMD_SEARCH_CANDIDATE, CMD_SEARCH_COMPANY } from '@/components/ui/CommandMenu';
+  CMD_OPEN_CHAT, CMD_SEARCH_CANDIDATE, CMD_SEARCH_COMPANY} from '@/components/CommandMenu/types';
+
 import SimpleSearchMenu from '@/components/ui/SimpleSearchMenu';
-import ModernAIMessage from '@/components/ui/ModernAIMessage';
-import ModernAIInput from '@/components/ui/ModernAIInput';
-import ModernEntityCard from '@/components/ui/ModernEntityCard';
-import Input from '@/components/ui/Input';
-import Button from '@/components/ui/Button';
-import { FiCpu, FiSettings } from 'react-icons/fi';
+import CVAnalyzer from '@/components/CVAnalyzer/CVAnalyzer';
+import { Candidate, Company } from '@/types';
 
 interface Message {
   id: string;
@@ -43,76 +38,9 @@ interface Message {
   };
 }
 
-const ApiKeySettingsModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
-  const { colors, theme } = useTheme();
-  const [apiKeyInput, setApiKeyInput] = useState('');
-
-  const handleSaveKey = () => {
-    if (apiKeyInput.trim().startsWith('sk-')) {
-      setOpenAIKey(apiKeyInput.trim());
-      onClose();
-    }
-  };
-
-  if (!isOpen) return null;
-  
-  return (
-    <div className="fixed inset-0 flex items-center justify-center z-50 backdrop-blur-sm bg-black bg-opacity-50 p-4">
-      <div
-        className="rounded-xl shadow-xl max-w-md w-full overflow-hidden"
-        style={{
-          background: theme === 'light'
-            ? 'linear-gradient(180deg, #FFFFFF 0%, #F9FAFB 100%)'
-            : 'linear-gradient(180deg, #1E293B 0%, #0F172A 100%)',
-        }}
-      >
-        <div className="px-6 py-4 border-b" style={{ borderColor: theme === 'light' ? '#E2E8F0' : '#334155' }}>
-          <h3 className="text-xl font-semibold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
-            OpenAI API Key (Frontend Fallback)
-          </h3>
-        </div>
-        <div className="p-6">
-          <p className="text-sm mb-4" style={{ color: `${colors.text}90` }}>
-            If backend AI services are unavailable, the system might attempt direct OpenAI calls.
-            Enter your OpenAI API key here. It will be stored in session storage.
-          </p>
-          <div className="space-y-1 mb-4">
-            <label htmlFor="apiKeyInputModal" className="block text-sm font-medium" style={{ color: colors.text }}>
-              API Key
-            </label>
-            <Input 
-              id="apiKeyInputModal" 
-              type="password" 
-              value={apiKeyInput} 
-              onChange={(e) => setApiKeyInput(e.target.value)} 
-              placeholder="sk-..." 
-              fullWidth 
-              className="p-3"
-            />
-            <p className="text-xs mt-1" style={{ color: `${colors.text}70` }}>
-              API keys typically start with &quot;sk-&quot;
-            </p>
-          </div>
-          <div className="flex justify-end gap-3 mt-6">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button 
-              variant="primary" 
-              onClick={handleSaveKey} 
-              disabled={!apiKeyInput.trim().startsWith('sk-')}
-            >
-              Save API Key
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 const AiAssistantPage = () => {
   const { colors, theme } = useTheme();
   const { user } = useAuth();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Use the Zustand store
   const {
@@ -130,21 +58,34 @@ const AiAssistantPage = () => {
     clearSelectedEntity,
   } = useDataStore();
 
+  // Chat state
   const [messages, setMessages] = useState<Message[]>([
     { 
       id: 'initial-greeting', 
-      content: "Hello! I'm your AI assistant. How can I help with your recruitment tasks today? Type '/' for commands.", 
+      content: "Hello! I'm your AI assistant for recruitment. How can I help you today? You can type a question or use '/' for commands.", 
       sender: 'assistant', 
       timestamp: new Date() 
     },
   ]);
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  
+  // UI state
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [showCandidateSearch, setShowCandidateSearch] = useState(false);
   const [showCompanySearch, setShowCompanySearch] = useState(false);
   const [showApiKeySettings, setShowApiKeySettings] = useState(false);
-  const [commandThatNeedsEntity, setCommandThatNeedsEntity] = useState<string | null>(null);
+  const [showCVAnalyzer, setShowCVAnalyzer] = useState(false);
+  
+  // Command processor
+  const [commandProcessor] = useState(() => new CommandProcessor(
+    setSelectedCandidate,
+    setSelectedCompany,
+    (message) => addMessage(message),
+    (query) => generateAIResponse(query),
+    setIsProcessing,
+    (updatedContent) => updateLastMessage(updatedContent)
+  ));
 
   // Fetch data when component mounts
   useEffect(() => {
@@ -152,11 +93,6 @@ const AiAssistantPage = () => {
     fetchCandidates(user?.officeId);
     fetchCompanies(user?.officeId);
   }, [fetchCandidates, fetchCompanies, user?.officeId]);
-
-  // Scroll to bottom when messages change
-  useEffect(() => { 
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); 
-  }, [messages]);
 
   // Add a message to the chat
   const addMessage = (message: Omit<Message, 'id' | 'timestamp'>) => {
@@ -188,7 +124,7 @@ const AiAssistantPage = () => {
       if (lowerQuery.startsWith('analyze cv') || lowerQuery.startsWith('/analyze_cv')) {
         const cvText = userQuery.replace(/analyze cv/i, '').replace(/\/analyze_cv/i, '').trim();
         if (cvText) {
-          const analysis = await analyzeCv(cvText);
+          const analysis = await openai.resume.analyzeCv(cvText);
           
           // Format the response
           let formattedResponse = `✅ **CV Analysis Complete!**\n\n`;
@@ -224,14 +160,14 @@ const AiAssistantPage = () => {
         
         if (isCandidate) { 
           // Candidate context
-          const candidate = selectedEntity as Candidate;
+          const candidate = selectedEntity;
           
           if (lowerQuery.includes('email') || lowerQuery.includes('draft an email')) {
             const purpose = lowerQuery.includes('email for') 
               ? lowerQuery.replace(/.*email for/i, '').trim() 
               : 'general inquiry';
               
-            return await generateCandidateEmail(
+            return await openai.email.generateCandidateEmail(
               candidate, 
               `Regarding: ${purpose}`, 
               `From AI Assistant query: ${userQuery}`
@@ -239,7 +175,7 @@ const AiAssistantPage = () => {
           }
           
           if (lowerQuery.includes('interview questions')) {
-            return await generatePositionInterviewQuestions(
+            return await openai.interview.generatePositionInterviewQuestions(
               candidate.position, 
               undefined, 
               `For candidate: ${candidate.firstName} ${candidate.lastName}`
@@ -247,25 +183,25 @@ const AiAssistantPage = () => {
           }
           
           if (lowerQuery.includes('feedback')) {
-            return await generateCandidateFeedback(candidate);
+            return await openai.candidate.generateCandidateFeedback(candidate);
           }
           
           // Default for candidate context
-          return await processGeneralQuery(
+          return await openai.chat.processGeneralQuery(
             userQuery, 
             `Context: Candidate - ${entityName}, Position: ${candidate.position}`
           );
           
         } else { 
           // Company context
-          const company = selectedEntity as Company;
+          const company = selectedEntity;
           
           if (lowerQuery.includes('email') || lowerQuery.includes('draft an email')) {
             const purpose = lowerQuery.includes('email for') 
               ? lowerQuery.replace(/.*email for/i, '').trim() 
               : 'general inquiry';
               
-            return await generateCompanyEmail(
+            return await openai.email.generateCompanyEmail(
               company, 
               `Regarding: ${purpose}`, 
               `From AI Assistant query: ${userQuery}`
@@ -276,18 +212,18 @@ const AiAssistantPage = () => {
             const positionMatch = lowerQuery.match(/job description for (?:an? )?(.*?) position/i);
             const position = positionMatch?.[1]?.trim() || 'a suitable role';
             
-            return await generateJobDescriptionService(position, company.name, company.industry);
+            return await openai.job.generateJobDescriptionService(position, company.name, company.industry);
           }
           
           if (lowerQuery.includes('interview questions')) {
             const positionMatch = lowerQuery.match(/interview questions for (?:an? )?(.*?) position/i);
             const position = positionMatch?.[1]?.trim() || 'a role';
             
-            return await generatePositionInterviewQuestions(position, company.name);
+            return await openai.interview.generatePositionInterviewQuestions(position, company.name);
           }
           
           // Default for company context
-          return await processGeneralQuery(
+          return await openai.chat.processGeneralQuery(
             userQuery, 
             `Context: Company - ${entityName}, Industry: ${company.industry}`
           );
@@ -300,7 +236,7 @@ const AiAssistantPage = () => {
                              lowerQuery.match(/draft a job description for (?:an? )?(.*?) position/i);
         const position = positionMatch?.[1]?.trim() || 'a generic role';
         
-        return await generateJobDescriptionService(position, 'Your Company (Generic)');
+        return await openai.job.generateJobDescriptionService(position, 'Your Company (Generic)');
       }
       
       if (lowerQuery.includes('interview questions') || lowerQuery.includes('create interview questions')) {
@@ -308,11 +244,11 @@ const AiAssistantPage = () => {
                              lowerQuery.match(/create interview questions for (?:an? )?(.*?) position/i);
         const position = positionMatch?.[1]?.trim() || 'a generic role';
         
-        return await generatePositionInterviewQuestions(position);
+        return await openai.interview.generatePositionInterviewQuestions(position);
       }
 
       // Default to general query processing
-      return await processGeneralQuery(userQuery);
+      return await openai.chat.processGeneralQuery(userQuery);
 
     } catch (error: any) {
       console.error("❌ Error in generateAIResponse:", error);
@@ -370,7 +306,7 @@ const AiAssistantPage = () => {
     });
     
     try {
-      const jd = await generateJobDescriptionService("General Position", "Our Company");
+      const jd = await openai.job.generateJobDescriptionService("General Position", "Our Company");
       updateLastMessage({ content: jd });
     } catch (error: any) {
       updateLastMessage({ 
@@ -392,7 +328,7 @@ const AiAssistantPage = () => {
     });
     
     try {
-      const questions = await generatePositionInterviewQuestions("General Role");
+      const questions = await openai.interview.generatePositionInterviewQuestions("General Role");
       updateLastMessage({ content: questions });
     } catch (error: any) {
       updateLastMessage({ 
@@ -416,8 +352,9 @@ const AiAssistantPage = () => {
     });
     
     // Execute pending command if there is one
-    if (commandThatNeedsEntity) {
-      triggerCommandAction(commandThatNeedsEntity, candidate);
+    const pendingCommand = commandProcessor.getCommandThatNeedsEntity();
+    if (pendingCommand) {
+      commandProcessor.executeCommand(pendingCommand, candidate);
     }
   };
 
@@ -432,104 +369,9 @@ const AiAssistantPage = () => {
     });
     
     // Execute pending command if there is one
-    if (commandThatNeedsEntity) {
-      triggerCommandAction(commandThatNeedsEntity, company);
-    }
-  };
-
-  // Execute a command with a selected entity
-  const triggerCommandAction = async (commandId: string, entity: Candidate | Company) => {
-    const entityName = 'firstName' in entity 
-      ? `${entity.firstName} ${entity.lastName}` 
-      : entity.name;
-      
-    console.log(`🔄 Executing command: ${commandId} for ${entityName}`);
-    
-    addMessage({ 
-      content: `Okay, I will ${commandId.replace(/_/g, ' ')} for ${entityName}. One moment...`, 
-      sender: 'assistant', 
-      isLoading: true 
-    });
-    
-    setIsProcessing(true);
-    setCommandThatNeedsEntity(null);
-
-    let responseContent = '';
-    try {
-      switch (commandId) {
-        case CMD_GENERATE_EMAIL:
-          responseContent = 'firstName' in entity
-            ? await generateCandidateEmail(entity as Candidate, "your specific email purpose")
-            : await generateCompanyEmail(entity as Company, "your specific email purpose");
-          break;
-          
-        case CMD_GENERATE_SUGGESTIONS:
-          responseContent = await processGeneralQuery(
-            `Provide 3-5 actionable suggestions for working with ${entityName}.`
-          );
-          break;
-          
-        case CMD_GENERATE_CANDIDATE_FEEDBACK:
-          if ('firstName' in entity) {
-            responseContent = await generateCandidateFeedback(entity as Candidate);
-          } else { 
-            responseContent = "Feedback generation is specifically for candidates."; 
-          }
-          break;
-          
-        case CMD_GENERATE_INTERVIEW_QUESTIONS:
-           if ('firstName' in entity) {
-             const cand = entity as Candidate;
-             responseContent = await generatePositionInterviewQuestions(
-               cand.position, 
-               undefined, 
-               `For candidate ${cand.firstName} ${cand.lastName}`
-             );
-           } else {
-             const comp = entity as Company;
-             responseContent = await generatePositionInterviewQuestions(
-               "a relevant role", 
-               comp.name
-             );
-           }
-          break;
-          
-        case CMD_GENERATE_JOB_DESCRIPTION:
-          if (!('firstName' in entity)) {
-            const comp = entity as Company;
-            responseContent = await generateJobDescriptionService(
-              "a new role", 
-              comp.name, 
-              comp.industry
-            );
-          } else { 
-            responseContent = "Job description generation is typically for companies. Please select a company or ask for a generic one."; 
-          }
-          break;
-          
-        case CMD_OPEN_CHAT:
-          responseContent = `Continuing our chat with focus on ${entityName}. What would you like to discuss or do?`;
-          break;
-          
-        default:
-          responseContent = `Action for "${commandId}" with entity ${entityName} is not implemented.`;
-      }
-      
-      updateLastMessage({ 
-        content: responseContent, 
-        entityReference: { 
-          type: 'firstName' in entity ? 'candidate' : 'company', 
-          id: entity.id, 
-          name: entityName 
-        } 
-      });
-    } catch (error: any) {
-      console.error(`❌ Error during action "${commandId}":`, error);
-      updateLastMessage({ 
-        content: `Error during action "${commandId}": ${error.message || 'Please try again.'}` 
-      });
-    } finally {
-      setIsProcessing(false);
+    const pendingCommand = commandProcessor.getCommandThatNeedsEntity();
+    if (pendingCommand) {
+      commandProcessor.executeCommand(pendingCommand, company);
     }
   };
   
@@ -544,10 +386,7 @@ const AiAssistantPage = () => {
     // Handle commands that don't require entities
     if (entityTypeRequired === null) {
       if (commandId === CMD_ANALYZE_CV) {
-        addMessage({ 
-          content: "Understood. Please paste the CV text in the input field below and send it for analysis.", 
-          sender: 'assistant' 
-        });
+        setShowCVAnalyzer(true);
         return; 
       }
       
@@ -569,7 +408,7 @@ const AiAssistantPage = () => {
         return;
       }
       
-      if(commandId === CMD_OPEN_CHAT && !selectedEntity) {
+      if (commandId === CMD_OPEN_CHAT && !selectedEntity) {
         addMessage({ 
           content: "You can ask general questions, or use /search_candidate or /search_company to set a context.", 
           sender: 'assistant'
@@ -579,14 +418,14 @@ const AiAssistantPage = () => {
     }
     
     // Remember command for after entity selection
-    setCommandThatNeedsEntity(commandId); 
+    commandProcessor.setCommandThatNeedsEntity(commandId);
 
     // Check if we already have the required entity selected
     if (selectedEntity) {
       const currentEntityType = 'firstName' in selectedEntity ? 'candidate' : 'company';
       
       if (entityTypeRequired === 'either' || entityTypeRequired === currentEntityType) {
-        triggerCommandAction(commandId, selectedEntity);
+        commandProcessor.executeCommand(commandId, selectedEntity);
         return;
       } else {
         addMessage({ 
@@ -638,10 +477,83 @@ const AiAssistantPage = () => {
     setShowCommandMenu(true);
   };
 
+  // Handler for CV Analyzer completion
+  const handleCVAnalysisComplete = async (analysisResults: any, cvText: string) => {
+    setShowCVAnalyzer(false);
+    setIsProcessing(true);
+    
+    // Show loading message first
+    addMessage({ 
+      content: "Processing the CV analysis results...", 
+      sender: 'assistant', 
+      isLoading: true 
+    });
+    
+    try {
+      // Format the response based on the analysis results
+      let formattedResponse = `✅ **CV Analysis Complete!**\n\n`;
+      
+      const analysis = analysisResults.analysis || analysisResults;
+      
+      if (analysis?.summary) formattedResponse += `**Summary:**\n${analysis.summary}\n\n`;
+      if (analysis?.total_experience_years !== undefined) {
+        formattedResponse += `**Total Experience:** ${analysis.total_experience_years} years\n`;
+      }
+      if (analysis?.skills && analysis.skills.length > 0) {
+        formattedResponse += `**Skills:** ${analysis.skills.join(', ')}\n`;
+      }
+      if (analysis?.education && analysis.education.length > 0) {
+        formattedResponse += `**Education:**\n${analysis.education.map((edu: any) => 
+          `  - ${edu.degree || 'N/A'} at ${edu.institution || 'N/A'} (${edu.end_year || 'N/A'})`
+        ).join('\n')}\n`;
+      }
+      if (analysis?.experience && analysis.experience.length > 0) { 
+        formattedResponse += `**Experience:**\n${analysis.experience.map((exp: any) => 
+          `  - ${exp.title || 'N/A'} at ${exp.company || 'N/A'} (${exp.duration || 'N/A'})`
+        ).join('\n')}\n`;
+      }
+      
+      // Add job matches if available
+      if (analysisResults.jobMatches && analysisResults.jobMatches.length > 0) {
+        formattedResponse += `\n**Job Matches:**\n`;
+        analysisResults.jobMatches.forEach((match: any, index: number) => {
+          formattedResponse += `${index + 1}. **${match.job_title}** at ${match.company_name} - Match: ${match.match_score}%\n`;
+          formattedResponse += `   Matching skills: ${match.matching_skills.join(', ')}\n`;
+          if (index < 2) { // Show more details for top matches
+            formattedResponse += `   ${match.match_explanation}\n`;
+            formattedResponse += `   Tip: ${match.improvement_suggestion}\n`;
+          }
+        });
+      }
+      
+      // Update the message with the formatted response
+      updateLastMessage({
+        content: formattedResponse.trim() || "CV Analyzed, but no specific details extracted.",
+      });
+    } catch (error: any) {
+      console.error('❌ Error processing CV analysis results:', error);
+      updateLastMessage({ 
+        content: `Sorry, I encountered an error processing the CV analysis: ${error.message || 'Please try again.'}` 
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col" style={{ backgroundColor: theme === 'light' ? '#F8FAFC' : '#0F172A' }}>
       {/* API Key Modal */}
-      <ApiKeySettingsModal isOpen={showApiKeySettings} onClose={() => setShowApiKeySettings(false)} />
+      <ApiKeySettingsModal 
+        isOpen={showApiKeySettings} 
+        onClose={() => setShowApiKeySettings(false)} 
+      />
+
+      {/* CV Analyzer */}
+      <CVAnalyzer 
+        isOpen={showCVAnalyzer}
+        onClose={() => setShowCVAnalyzer(false)}
+        onAnalysisComplete={handleCVAnalysisComplete}
+      />
 
       {/* Command Menu */}
       <CommandMenu
@@ -661,16 +573,16 @@ const AiAssistantPage = () => {
         isLoading={isLoadingCandidates}
         error={candidatesError}
         onSelect={(item) => { 
-          if ('firstName' in item) handleSelectCandidate(item as Candidate); 
+          if ('firstName' in item) handleSelectCandidate(item); 
         }}
         onClose={() => {
           setShowCandidateSearch(false);
-          if(commandThatNeedsEntity && !selectedEntity) {
+          if(commandProcessor.getCommandThatNeedsEntity() && !selectedEntity) {
             addMessage({ 
-              content: `Action "${commandThatNeedsEntity.replace(/_/g, ' ')}" cancelled as no candidate was selected.`, 
+              content: `Action "${commandProcessor.getCommandThatNeedsEntity()?.replace(/_/g, ' ')}" cancelled as no candidate was selected.`, 
               sender: 'assistant' 
             });
-            setCommandThatNeedsEntity(null);
+            commandProcessor.setCommandThatNeedsEntity(null);
           }
         }}
         title="Select a Candidate to Set Context"
@@ -683,16 +595,16 @@ const AiAssistantPage = () => {
         isLoading={isLoadingCompanies}
         error={companiesError}
         onSelect={(item) => { 
-          if (!('firstName' in item)) handleSelectCompany(item as Company); 
+          if (!('firstName' in item)) handleSelectCompany(item); 
         }}
         onClose={() => {
           setShowCompanySearch(false);
-          if(commandThatNeedsEntity && !selectedEntity) {
+          if(commandProcessor.getCommandThatNeedsEntity() && !selectedEntity) {
             addMessage({ 
-              content: `Action "${commandThatNeedsEntity.replace(/_/g, ' ')}" cancelled as no company was selected.`, 
+              content: `Action "${commandProcessor.getCommandThatNeedsEntity()?.replace(/_/g, ' ')}" cancelled as no company was selected.`, 
               sender: 'assistant' 
             });
-            setCommandThatNeedsEntity(null);
+            commandProcessor.setCommandThatNeedsEntity(null);
           }
         }}
         title="Select a Company to Set Context"
@@ -701,73 +613,29 @@ const AiAssistantPage = () => {
       {/* Main Chat Interface */}
       <div className="flex flex-col h-full w-full overflow-hidden" style={{ backgroundColor: colors.background }}>
         {/* Header */}
-        <div className="px-6 py-4 border-b flex items-center justify-between sticky top-0 z-20" style={{
-          backgroundColor: theme === 'light' ? '#FFFFFF' : '#1E293B',
-          borderColor: theme === 'light' ? '#E2E8F0' : '#334155',
-          boxShadow: theme === 'light' ? '0 1px 3px rgba(0, 0, 0, 0.05)' : '0 1px 3px rgba(0, 0, 0, 0.2)'
-        }}>
-          <div className="flex items-center">
-            <div className="mr-3 h-10 w-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: colors.primary }}>
-              <FiCpu className="w-6 h-6 text-white" />
-            </div>
-            <h1 className="text-2xl font-bold" style={{ color: colors.text }}>AI Assistant</h1>
-          </div>
-          {selectedEntity ? (
-            <ModernEntityCard 
-              entity={selectedEntity} 
-              onClear={() => {
-                clearSelectedEntity();
-                addMessage({
-                  content: "Context cleared. You can now ask general questions or select a new entity.", 
-                  sender: 'assistant'
-                });
-              }} 
-            />
-          ) : (
-            <Button
-              variant="outline"
-              onClick={() => setShowApiKeySettings(true)}
-              className="text-sm"
-              leftIcon={<FiSettings />}
-            >
-              API Settings
-            </Button>
-          )}
-        </div>
+        <ChatHeader
+          selectedEntity={selectedEntity}
+          onClearEntity={clearSelectedEntity}
+          onOpenSettings={() => setShowApiKeySettings(true)}
+        />
 
         {/* Chat Area */}
         <div className="flex flex-1 overflow-hidden p-4">
-          <div className="flex flex-col flex-1 max-h-full rounded-xl overflow-hidden border" style={{ backgroundColor: colors.card, borderColor: colors.border }}>
+          <div className="flex flex-col flex-1 max-h-full rounded-xl overflow-hidden border shadow-sm" 
+            style={{ 
+              backgroundColor: colors.card, 
+              borderColor: colors.border,
+              boxShadow: theme === 'light' 
+                ? '0 1px 3px rgba(0, 0, 0, 0.05)' 
+                : '0 1px 3px rgba(0, 0, 0, 0.1)',
+            }}
+          >
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
-              <AnimatePresence initial={false}>
-                {messages.map((message, index) => (
-                  <motion.div
-                    key={message.id}
-                    layout
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.15 } }}
-                    transition={{ type: "spring", stiffness: 300, damping: 25, delay: index * 0.05 }}
-                  >
-                    <ModernAIMessage
-                      id={message.id}
-                      content={message.content}
-                      sender={message.sender}
-                      timestamp={message.timestamp}
-                      isLoading={message.isLoading}
-                      entityReference={message.entityReference}
-                      isLast={index === messages.length - 1}
-                    />
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-              <div ref={messagesEndRef} />
-            </div>
+            <ChatMessageList messages={messages} />
             
             {/* Input Area */}
             <div className="p-4 border-t" style={{ borderColor: colors.border }}>
-              <ModernAIInput
+              <ChatInput
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -775,7 +643,7 @@ const AiAssistantPage = () => {
                 onSlashCommand={handleSlashCommand}
                 placeholder={selectedEntity
                   ? `Ask about ${'firstName' in selectedEntity ? `${selectedEntity.firstName} ${selectedEntity.lastName}` : selectedEntity.name}... or type /`
-                  : "Type / for commands or ask a general question..."}
+                  : "Type / for commands or ask a general recruitment question..."}
                 disabled={isProcessing}
                 entityName={selectedEntity ? ('firstName' in selectedEntity ? `${selectedEntity.firstName} ${selectedEntity.lastName}` : selectedEntity.name) : null}
                 entityType={selectedEntity ? ('firstName' in selectedEntity ? 'candidate' : 'company') : null}
