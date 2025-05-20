@@ -6,7 +6,7 @@ import { PaginatedResponse } from './types';
 export const companiesService = {
   getAll: async (officeId?: string, industry?: string, search?: string, hasOpenPositions?: boolean, page = 1, limit = 50) => {
     try {
-      let endpoint = '/api/v1/companies?';
+      let endpoint = '/companies?';
       
       if (officeId) endpoint += `office_id=${officeId}&`;
       if (industry) endpoint += `industry=${encodeURIComponent(industry)}&`;
@@ -39,7 +39,7 @@ export const companiesService = {
     
   getById: async (id: string) => {
     try {
-      const company = await fetcher<Company>(`/api/v1/companies/${id}`);
+      const company = await fetcher<Company>(`/companies/${id}`);
       
       return {
         ...company,
@@ -54,7 +54,7 @@ export const companiesService = {
   
   getJobsByCompany: async (companyId: string) => {
     try {
-      const response = await fetcher<{ jobs: Job[], total: number }>(`/api/v1/companies/${companyId}/jobs`);
+      const response = await fetcher<{ jobs: Job[], total: number }>(`/companies/${companyId}/jobs`);
       
       // Ensure all date fields are properly converted to Date objects
       const jobs = response.jobs.map(job => ({
@@ -76,7 +76,7 @@ export const companiesService = {
     
   create: async (company: Omit<Company, 'id' | 'createdAt' | 'updatedAt'>) => {
     try {
-      const newCompany = await fetcher<Company>('/api/v1/companies/', {
+      const newCompany = await fetcher<Company>('/companies/', {
         method: 'POST',
         body: JSON.stringify(company),
       });
@@ -94,7 +94,7 @@ export const companiesService = {
     
   update: async (id: string, updates: Partial<Company>) => {
     try {
-      const updatedCompany = await fetcher<Company>(`/api/v1/companies/${id}`, {
+      const updatedCompany = await fetcher<Company>(`/companies/${id}`, {
         method: 'PUT',
         body: JSON.stringify(updates),
       });
@@ -112,7 +112,7 @@ export const companiesService = {
     
   delete: async (id: string) => {
     try {
-      const result = await fetcher<{ success: boolean }>(`/api/v1/companies/${id}`, {
+      const result = await fetcher<{ success: boolean }>(`/companies/${id}`, {
         method: 'DELETE',
       });
       

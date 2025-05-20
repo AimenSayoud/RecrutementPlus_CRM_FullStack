@@ -1,9 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api.v1 import ai_tools
-
-
+from app.api.v1 import ai_tools, candidates, companies, jobs, skills, users, messaging
 
 app = FastAPI(
     title="RecrutementPlus API",
@@ -22,14 +20,22 @@ app.add_middleware(
 
 # Include routers
 app.include_router(ai_tools.router, prefix="/api/v1/ai-tools", tags=["ai-tools"])
-
-# Include data endpoints
-# app.include_router(candidates.router, prefix="/api/v1/candidates", tags=["candidates"])
-# app.include_router(companies.router, prefix="/api/v1/companies", tags=["companies"])
-# app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
-# app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
-# app.include_router(skills.router, prefix="/api/v1/skills", tags=["skills"])
+app.include_router(candidates.router, prefix="/api/v1/candidates", tags=["candidates"])
+app.include_router(companies.router, prefix="/api/v1/companies", tags=["companies"])
+app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
+app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
+app.include_router(skills.router, prefix="/api/v1/skills", tags=["skills"])
+app.include_router(messaging.router, prefix="/api/v1", tags=["messaging"])
 
 @app.get("/")
 async def root():
     return {"message": "Welcome to RecrutementPlus CRM API"}
+
+@app.get("/api/health")
+async def health_check():
+    """API health check endpoint"""
+    return {
+        "status": "healthy",
+        "version": "0.1.0",
+        "environment": "development"
+    }

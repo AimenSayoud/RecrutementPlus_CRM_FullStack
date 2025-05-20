@@ -32,6 +32,30 @@ async def analyze_cv_endpoint(request_data: CVAnalysisRequest):
         logger.error(f"Error analyzing CV: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error analyzing CV: {str(e)}")
 
+@router.post("/analyze-cv-with-job-match")
+async def analyze_cv_with_job_match_endpoint(request_data: CVAnalysisRequest):
+    """Analyze CV text and match with suitable jobs"""
+    try:
+        # Step 1: Analyze CV
+        cv_analysis = ai_service.analyze_cv_with_openai(request_data.cv_text)
+        logger.info(f"Successfully analyzed CV. Skills extracted: {len(cv_analysis.get('skills', []))}")
+        
+        # Step 2: Match with jobs
+        job_matches = ai_service.match_jobs_with_openai(
+            cv_analysis=cv_analysis,
+            max_jobs_to_match=5
+        )
+        logger.info(f"Successfully matched CV with {len(job_matches)} jobs")
+        
+        # Return combined result
+        return {
+            "cv_analysis": cv_analysis,
+            "job_matches": job_matches
+        }
+    except Exception as e:
+        logger.error(f"Error analyzing CV and matching jobs: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing CV and matching jobs: {str(e)}")
+
 @router.post("/match-jobs", response_model=List[JobMatchResponseItem])
 async def match_jobs_endpoint(request_data: JobMatchRequest):
     """Match CV against jobs with enhanced semantic matching"""

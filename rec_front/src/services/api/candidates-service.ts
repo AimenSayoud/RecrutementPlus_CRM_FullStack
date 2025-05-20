@@ -6,7 +6,7 @@ import { PaginatedResponse } from './types';
 export const candidatesService = {
   getAll: async (officeId?: string, search?: string, skill?: string, status?: string, page = 1, limit = 50) => {
     try {
-      let endpoint = '/api/v1/candidates?';
+      let endpoint = '/candidates?';
       
       if (officeId) endpoint += `office_id=${officeId}&`;
       if (search) endpoint += `search=${encodeURIComponent(search)}&`;
@@ -39,7 +39,7 @@ export const candidatesService = {
     
   getById: async (id: string) => {
     try {
-      const candidate = await fetcher<Candidate>(`/api/v1/candidates/${id}`);
+      const candidate = await fetcher<Candidate>(`/candidates/${id}`);
       
       return {
         ...candidate,
@@ -54,7 +54,7 @@ export const candidatesService = {
     
   create: async (candidate: Omit<Candidate, 'id' | 'createdAt' | 'updatedAt'>) => {
     try {
-      const newCandidate = await fetcher<Candidate>('/api/v1/candidates/', {
+      const newCandidate = await fetcher<Candidate>('/candidates/', {
         method: 'POST',
         body: JSON.stringify(candidate),
       });
@@ -72,7 +72,7 @@ export const candidatesService = {
     
   update: async (id: string, updates: Partial<Candidate>) => {
     try {
-      const updatedCandidate = await fetcher<Candidate>(`/api/v1/candidates/${id}`, {
+      const updatedCandidate = await fetcher<Candidate>(`/candidates/${id}`, {
         method: 'PUT',
         body: JSON.stringify(updates),
       });
@@ -90,7 +90,7 @@ export const candidatesService = {
     
   delete: async (id: string) => {
     try {
-      const result = await fetcher<{ success: boolean }>(`/api/v1/candidates/${id}`, {
+      const result = await fetcher<{ success: boolean }>(`/candidates/${id}`, {
         method: 'DELETE',
       });
       
