@@ -187,7 +187,7 @@ const CandidatesPage = () => {
   const [showMobileSearch, setShowMobileSearch] = useState(false);
 
   const { data: candidates, loading, error, refetch } = useApiQuery<Candidate[]>(
-    () => apiService.candidates.getAll(user?.role === 'super_admin' ? undefined : user?.officeId),
+    () => apiService.candidates.getAll(user?.role === 'super_admin' ? undefined : user?.officeId).then(res => res.items),
     [user?.officeId]
   );
 

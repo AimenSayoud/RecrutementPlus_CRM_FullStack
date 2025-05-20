@@ -94,13 +94,19 @@ const CompaniesPage = () => {
 
   // Fetch companies based on user's office access
   const { data: companies, loading, error, refetch } = useApiQuery<Company[]>(
-    () => apiService.companies.getAll(user?.role === 'super_admin' ? undefined : user?.officeId),
+    async () => {
+      const res = await apiService.companies.getAll(user?.role === 'super_admin' ? undefined : user?.officeId);
+      return res.items;
+    },
     [user?.officeId]
   );
 
   // Fetch jobs to show in company detail modal
   const { data: jobs } = useApiQuery<Job[]>(
-    () => apiService.jobs.getAll(user?.role === 'super_admin' ? undefined : user?.officeId),
+    async () => {
+      const res = await apiService.jobs.getAll(user?.role === 'super_admin' ? undefined : user?.officeId);
+      return res.items;
+    },
     [user?.officeId]
   );
 

@@ -44,7 +44,9 @@ const TeamPage = () => {
 
   // Fetch users and offices based on current user's access
   const { data: users, loading, error, refetch } = useApiQuery<User[]>(
-    () => apiService.users.getAll(currentUser?.role === 'super_admin' ? undefined : currentUser?.officeId),
+    () => apiService.users
+      .getAll(currentUser?.role === 'super_admin' ? undefined : currentUser?.officeId)
+      .then(res => res.items),
     [currentUser?.role, currentUser?.officeId]
   );
   
