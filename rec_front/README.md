@@ -25,6 +25,7 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 ## AI Assistant Integration
 
 The RecPlus CRM includes an AI Assistant powered by OpenAI's API that helps with recruiting tasks such as:
+
 - Generating personalized email templates for candidates and companies
 - Creating role-specific interview questions
 - Drafting comprehensive job descriptions
@@ -34,15 +35,17 @@ The RecPlus CRM includes an AI Assistant powered by OpenAI's API that helps with
 ### Setup
 
 1. **Get an OpenAI API Key**:
+
    - Sign up for an account at [OpenAI](https://platform.openai.com/) if you don't have one
    - Navigate to the API section and create a new API key
 
 2. **Configure Environment Variables**:
+
    - Copy the `.env.local.example` file to create a new file named `.env.local` in the root directory of the project
    - Add your OpenAI API key to the file:
      ```
      NEXT_PUBLIC_OPENAI_API_KEY=your_openai_api_key_goes_here
-     NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+     NEXT_PUBLIC_API_BASE_URL=http://localhost:8080
      NEXT_PUBLIC_USE_MOCK_DATA=true
      ```
    - Set `NEXT_PUBLIC_USE_MOCK_DATA=false` when connecting to a real backend
@@ -52,7 +55,8 @@ The RecPlus CRM includes an AI Assistant powered by OpenAI's API that helps with
    - The AI integration is implemented in `/src/lib/openai-service.ts`
    - The environment variable is accessed in this file:
      ```typescript
-     const OPENAI_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY || 'your-api-key-here';
+     const OPENAI_API_KEY =
+       process.env.NEXT_PUBLIC_OPENAI_API_KEY || "your-api-key-here";
      ```
    - When deploying to production, ensure your environment variables are set in your hosting platform
 
@@ -61,11 +65,13 @@ The RecPlus CRM includes an AI Assistant powered by OpenAI's API that helps with
 The AI integration follows this architecture:
 
 1. **Frontend Components**:
+
    - `src/app/ai-assistant/page.tsx`: Main AI Assistant interface with chat, slash commands, and entity selection
    - `src/components/ui/SlashCommandMenu.tsx`: Implements the slash command dropdown menu
    - `src/components/ui/EntitySearchMenu.tsx`: Provides search functionality for candidates and companies
 
 2. **OpenAI Service**:
+
    - `src/lib/openai-service.ts`: Core service that handles API communication with OpenAI
    - Implements various specialized functions for different AI capabilities:
      - `generateChatCompletion`: Base function for OpenAI API calls
@@ -90,6 +96,7 @@ The AI integration follows this architecture:
 The AI Assistant can be accessed from the sidebar menu. Key features include:
 
 1. **Slash Commands**: Type `/` to access commands for:
+
    - Searching candidates
    - Searching companies
    - Generating emails
@@ -98,6 +105,7 @@ The AI Assistant can be accessed from the sidebar menu. Key features include:
    - Generating candidate feedback
 
 2. **Entity Context**: Select a candidate or company to:
+
    - Generate personalized content about that entity
    - Create tailored emails, feedback or interview questions
    - The AI remembers the selected entity for follow-up questions
@@ -119,12 +127,14 @@ The AI Assistant can be accessed from the sidebar menu. Key features include:
 ### Testing without an API Key
 
 For development and testing without using OpenAI credits:
+
 - Set `NEXT_PUBLIC_USE_MOCK_DATA=true` in your `.env.local` file to use mock data
 - With this setting, the application will use the fallback data in `api-fallback.ts` instead of making real API calls
 - This allows you to test the AI assistant UI and functionality without consuming OpenAI credits
 - The mock implementation will simulate API responses and delays to provide a realistic experience
 
 To use a completely different mock API:
+
 - Edit the `API_URL` in `openai-service.ts` to point to a mock API endpoint
 - Implement a mock server that responds with compatible JSON responses
 - Or use a service like MockAPI or other mock API tools
@@ -134,17 +144,20 @@ To use a completely different mock API:
 If you encounter issues while running the project:
 
 1. **Development Server Errors**:
+
    - Try running without Turbopack: `npm run dev` (instead of `npm run dev:turbo`)
    - Clear Next.js cache: `rm -rf .next` and restart the server
    - Check for TypeScript errors: `npm run type-check`
 
 2. **OpenAI API Issues**:
+
    - Verify your API key is correctly set in `.env.local`
    - Ensure the model name 'gpt-4o-mini' in `openai-service.ts` is available with your OpenAI account
    - If needed, you can change the model to 'gpt-3.5-turbo' which is available on all OpenAI accounts
    - Use `NEXT_PUBLIC_USE_MOCK_DATA=true` to bypass API calls during development
 
 3. **Component Rendering Errors**:
+
    - Check the browser console for specific errors
    - Components with potential null/undefined values have been fixed with optional chaining
    - If you encounter "Cannot read properties of undefined" errors, add additional null checks
@@ -162,6 +175,7 @@ To learn more about Next.js, take a look at the following resources:
 - [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
 For more information about the OpenAI API:
+
 - [OpenAI API Documentation](https://platform.openai.com/docs/api-reference)
 - [OpenAI Chat Completions Guide](https://platform.openai.com/docs/guides/text-generation)
 
