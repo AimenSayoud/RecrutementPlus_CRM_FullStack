@@ -3,7 +3,7 @@
 
 // API base URL from environment variables
 export const API_BASE_URL =  'http://localhost:8000/api/v1';
-export const API_URL = 'http://127.0.0.1:8000/api/v1';
+export const API_URL = 'http://127.0.0.1:8080/api/v1';
 
 // Request timeout in milliseconds
 export const DEFAULT_TIMEOUT = 10000; // 10 seconds
