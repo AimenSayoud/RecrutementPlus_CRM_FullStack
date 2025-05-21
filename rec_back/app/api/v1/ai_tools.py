@@ -18,7 +18,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Initialize AI service
-from app.services.ai_service import AIService
+from app.services.ai_service import AIService, DEFAULT_MODEL
 ai_service = AIService() # ai_service should already be initialized with data
 
 @router.post("/analyze-cv", response_model=CVAnalysisResponse)
@@ -161,7 +161,7 @@ async def chat_completion_endpoint(request_data: ChatCompletionRequest):
         # For now, we'll just pass the messages through, assuming the first one might be a system prompt.
         
         response = ai_service.client.chat.completions.create(
-            model=ai_service.DEFAULT_MODEL, # Or allow model selection from request_data
+            model=DEFAULT_MODEL, # Use the module-level constant
             messages=[msg.model_dump() for msg in request_data.messages],
             # temperature=request_data.temperature, # If you add to request
         )

@@ -737,6 +737,53 @@ class AIService:
              "remote_option": job.get("remote_option", False)
          }
 
+    def _extract_placeholders(self, template_text: str) -> List[str]:
+        """Extract placeholders from email template text (format: {{placeholder}})."""
+        import re
+        placeholders = re.findall(r'\{\{(\w+)\}\}', template_text)
+        return list(set(placeholders))  # Return unique placeholders
+
+    def _get_candidate_email_context_data(self, candidate_id: str) -> Dict[str, Any]:
+        """
+        Get candidate data for email context.
+        
+        Args:
+            candidate_id: The ID of the candidate.
+            
+        Returns:
+            Dictionary with candidate data for email context.
+        """
+        # Find the candidate by ID
+        candidate = next((c for c in self.candidates if str(c.get("id")) == candidate_id), None)
+        if not candidate:
+            logger.warning(f"Candidate with ID {candidate_id} not found")
+            return {}
+            
+        # Map skills IDs to skill names if available
+        skills = []
+        for skill_id in candidate.get("skills", []):
+            skill_name = self.skill_lookup.get(skill_id)
+            if skill_name:
+                skills.append(skill_name)
+                
+        # Get user data if available (for contact information)
+        user = next((u for u in self.users if u.get("id") == candidate.get("user_id")), {})
+        
+        # Build context data
+        context = {
+            "candidate_name": f"{candidate.get('first_name', '')} {candidate.get('last_name', '')}",
+            "candidate_id": candidate_id,
+            "email": user.get("email", ""),
+            "phone": candidate.get("phone", ""),
+            "skills": skills,
+            "position": candidate.get("current_position", ""),
+            "experience_years": candidate.get("years_of_experience", 0),
+            "education": candidate.get("education", []),
+            "status": candidate.get("status", "active")
+        }
+        
+        return context
+
     def _prepare_email_context(self, template_id: str, recipient_type: str, context: Dict[str, Any]) -> Dict[str, Any]:
          """Creates a richer context dictionary for the email generation prompt."""
          enhanced_context = {"communication_purpose": template_id.replace("_", " ")}
