@@ -3,7 +3,8 @@
 
 import React from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser, selectIsLoading } from '@/store/useAuthStore';
+import { useEffect, useState } from 'react';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import { usePathname, useRouter } from 'next/navigation';
@@ -14,7 +15,13 @@ interface MainLayoutProps {
 
 const MainLayout = ({ children }: MainLayoutProps) => {
   const { colors } = useTheme();
-  const { user, isLoading } = useAuth();
+  const [mounted, setMounted] = useState(false);
+  const user = useAuthStore(selectUser);
+  const isLoading = useAuthStore(selectIsLoading);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -29,7 +36,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
   }, [user, isLoading, router, isLoginPage]);
 
   // Show loading state
-  if (isLoading) {
+  if (!mounted || isLoading) {
     return (
       <div className="flex items-center justify-center h-screen" style={{ backgroundColor: colors.background }}>
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2" style={{ borderColor: colors.primary }}></div>

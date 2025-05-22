@@ -78,6 +78,8 @@ const CVAnalyzer: React.FC<CVAnalyzerProps> = ({ isOpen, onClose, onAnalysisComp
   // State to track file upload details
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isFileUpload, setIsFileUpload] = useState(false);
+  const [fileInfo, setFileInfo] = useState<any>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Handle file upload from input change
@@ -91,6 +93,32 @@ const CVAnalyzer: React.FC<CVAnalyzerProps> = ({ isOpen, onClose, onAnalysisComp
   // Process the uploaded file
   const processFile = (file: File) => {
     setUploadedFile(file);
+    setIsFileUpload(true);
+    
+    // Validate file type
+    const supportedTypes = ['text/plain', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    const supportedExtensions = ['.txt', '.md', '.pdf', '.docx'];
+    
+    const fileExtension = file.name.toLowerCase().split('.').pop();
+    const isSupported = supportedTypes.includes(file.type) || supportedExtensions.includes(`.${fileExtension}`);
+    
+    if (!isSupported) {
+      alert('Unsupported file type. Please upload a PDF, DOCX, or TXT file.');
+      setUploadedFile(null);
+      setCvText('');
+      setIsFileUpload(false);
+      return;
+    }
+    
+    // Validate file size (10MB limit)
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      alert(`File too large. Maximum size is ${maxSize / 1024 / 1024}MB.`);
+      setUploadedFile(null);
+      setCvText('');
+      setIsFileUpload(false);
+      return;
+    }
     
     // Only read as text for text-based files
     if (file.type === 'text/plain' || 
@@ -101,18 +129,28 @@ const CVAnalyzer: React.FC<CVAnalyzerProps> = ({ isOpen, onClose, onAnalysisComp
       reader.onload = (event) => {
         if (event.target?.result) {
           setCvText(event.target.result as string);
+          setIsFileUpload(false);
         }
       };
       reader.readAsText(file);
-    } else {
-      // For non-text files (PDF, DOC, DOCX), we would normally send to backend
-      // Since we're already processing in the analyzeCvWithJobMatch function,
-      // we'll just set a placeholder text so the analyze button is enabled
+    } else if (file.type === 'application/pdf' || 
+               file.name.endsWith('.pdf') ||
+               file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+               file.name.endsWith('.docx')) {
+      // For PDF and DOCX files, set placeholder text
+      const fileType = file.type === 'application/pdf' || file.name.endsWith('.pdf') ? 'PDF' : 'DOCX';
       setCvText(`[File uploaded: ${file.name}]
-This file will be sent to the backend for processing.
+This ${fileType} file will be processed by our backend.
 Type: ${file.type}
 Size: ${(file.size / 1024).toFixed(1)} KB
-      `);
+
+Click "Analyze CV" to process this file.`);
+      setIsFileUpload(false);
+    } else {
+      // Unsupported file type
+      setCvText('');
+      setIsFileUpload(false);
+      alert('Unsupported file type. Please upload a PDF, DOCX, or TXT file.');
     }
   };
 
@@ -150,7 +188,7 @@ Size: ${(file.size / 1024).toFixed(1)} KB
 
   // Start CV analysis process
   const handleAnalyze = async () => {
-    if (!cvText.trim()) return;
+    if (!cvText.trim() && !uploadedFile) return;
     
     // Immediately set to processing step to show animation
     setCurrentStep('processing');
@@ -159,6 +197,7 @@ Size: ${(file.size / 1024).toFixed(1)} KB
     setAnalysisResult(null);
     setJobMatches([]);
     setErrorMessage('');
+    setFileInfo(null);
     
     try {
       console.log("Starting CV analysis process...");
@@ -166,9 +205,32 @@ Size: ${(file.size / 1024).toFixed(1)} KB
       // Add a small artificial delay to ensure animation is visible
       await new Promise(resolve => setTimeout(resolve, 800));
       
-      // Call enhanced CV analysis and job matching API
-      console.log("Calling API with CV text length:", cvText.length);
-      const result = await openai.resume.analyzeCvWithJobMatch(cvText);
+      let result;
+      
+      // Check if we have a file to upload (PDF, DOCX)
+      if (uploadedFile && (
+          uploadedFile.type === 'application/pdf' || 
+          uploadedFile.name.endsWith('.pdf') ||
+          uploadedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
+          uploadedFile.name.endsWith('.docx')
+        )) {
+        console.log("Processing file upload:", uploadedFile.name);
+        
+        // Use file upload API with progress tracking
+        result = await openai.resume.analyzeCvFile(uploadedFile, (progressEvent) => {
+          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setProcessingProgress(Math.min(progress * 0.9, 90)); // Use 90% for upload, 10% for processing
+        });
+        
+        // Store file info for display
+        setFileInfo(result.file_info);
+        
+      } else {
+        // Use text analysis for TXT files or pasted text
+        console.log("Processing text with length:", cvText.length);
+        result = await openai.resume.analyzeCvWithJobMatch(cvText);
+      }
+      
       console.log("API response received:", result);
       
       // Ensure we complete the progress bar
@@ -186,7 +248,25 @@ Size: ${(file.size / 1024).toFixed(1)} KB
       
     } catch (error: any) {
       console.error('Error analyzing CV:', error);
-      setErrorMessage(error.message || 'Failed to analyze CV. Please try again.');
+      
+      // Handle specific error types
+      let errorMsg = 'Failed to analyze CV. Please try again.';
+      if (error.response) {
+        const status = error.response.status;
+        const detail = error.response.data?.detail || error.response.data?.message;
+        
+        if (status === 413) {
+          errorMsg = 'File is too large. Please upload a file smaller than 10MB.';
+        } else if (status === 400 && detail) {
+          errorMsg = detail;
+        } else if (detail) {
+          errorMsg = detail;
+        }
+      } else if (error.message) {
+        errorMsg = error.message;
+      }
+      
+      setErrorMessage(errorMsg);
       setCurrentStep('error');
     }
   };
@@ -342,8 +422,11 @@ Bachelor of Science in Software Engineering | State University | 2012-2016`;
                         <h4 className="text-base font-medium mb-2" style={{ color: colors.text }}>
                           Drag & Drop CV File
                         </h4>
-                        <p className="text-sm opacity-70 mb-4 text-center" style={{ color: colors.text }}>
+                        <p className="text-sm opacity-70 mb-2 text-center" style={{ color: colors.text }}>
                           Drop your CV file here, or click to browse
+                        </p>
+                        <p className="text-xs opacity-60 mb-4 text-center" style={{ color: colors.text }}>
+                          Supported formats: PDF, DOCX, TXT (Max 10MB)
                         </p>
                         <Button
                           variant="outline"
@@ -357,7 +440,7 @@ Bachelor of Science in Software Engineering | State University | 2012-2016`;
                     <input
                       type="file"
                       ref={fileInputRef}
-                      accept=".txt,.pdf,.doc,.docx"
+                      accept=".txt,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
                       onChange={handleFileUpload}
                       className="hidden"
                     />

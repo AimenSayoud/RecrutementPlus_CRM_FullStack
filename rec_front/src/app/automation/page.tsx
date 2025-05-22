@@ -3,7 +3,7 @@
 
 import React from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser, selectCanAccess } from '@/store/useAuthStore';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
@@ -11,7 +11,8 @@ import Badge from '@/components/ui/Badge';
 const AutomationPage = () => {
   const { colors } = useTheme();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { user, canAccess } = useAuth();
+  const user = useAuthStore(selectUser);
+  const canAccess = useAuthStore(selectCanAccess);
 
   // Only admin or higher can access this page
   const hasAccess = canAccess('admin');

@@ -3,7 +3,7 @@
 
 import React, { useState } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser, selectCanAccess } from '@/store/useAuthStore';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -22,7 +22,8 @@ const validateEmail = (email: string): boolean => {
 
 const TeamPage = () => {
   const { colors } = useTheme();
-  const { user: currentUser, canAccess } = useAuth();
+  const currentUser = useAuthStore(selectUser);
+  const canAccess = useAuthStore(selectCanAccess);
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);

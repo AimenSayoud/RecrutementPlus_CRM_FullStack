@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, File, UploadFile
 from typing import List, Optional, Dict, Any
 import logging
 
@@ -13,6 +13,9 @@ from app.models.ai_tools_models import (
     EmailTemplateInfoResponseItem,
     ChatCompletionRequest, ChatCompletionResponse
 )
+
+# Import document parser
+from app.services.document_parser import DocumentParser
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -197,4 +200,80 @@ async def generate_candidate_feedback_endpoint(request_data: CandidateFeedbackRe
     except Exception as e:
         logger.error(f"Error generating candidate feedback: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating candidate feedback: {str(e)}")
+
+
+@router.post("/analyze-cv-file")
+async def analyze_cv_file_endpoint(file: UploadFile = File(...)):
+    """Analyze CV from uploaded file (PDF, DOCX, or TXT)"""
+    try:
+        # Validate file size (10MB limit)
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+        file_content = await file.read()
+        
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413, 
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE/1024/1024:.1f}MB"
+            )
+        
+        # Get file info
+        file_info = DocumentParser.get_file_info(
+            file_content, 
+            file.content_type or "", 
+            file.filename or ""
+        )
+        
+        # Validate file type
+        if not file_info["is_supported"]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported file type: {file.content_type}. Supported types: PDF, DOCX, TXT"
+            )
+        
+        logger.info(f"Processing file: {file_info}")
+        
+        # Extract text from file
+        cv_text = DocumentParser.extract_text_from_file(
+            file_content, 
+            file.content_type or "", 
+            file.filename or ""
+        )
+        
+        # Validate extracted text
+        if not cv_text or len(cv_text.strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Insufficient text extracted from file. Please ensure the file contains readable CV content."
+            )
+        
+        logger.info(f"Successfully extracted {len(cv_text)} characters from file")
+        
+        # Use existing CV analysis logic
+        cv_analysis = ai_service.analyze_cv_with_openai(cv_text)
+        logger.info(f"Successfully analyzed CV. Skills extracted: {len(cv_analysis.get('skills', []))}")
+        
+        # Match with jobs
+        job_matches = ai_service.match_jobs_with_openai(
+            cv_analysis=cv_analysis,
+            max_jobs_to_match=5
+        )
+        logger.info(f"Successfully matched CV with {len(job_matches)} jobs")
+        
+        return {
+            "cv_analysis": cv_analysis,
+            "job_matches": job_matches,
+            "extracted_text_length": len(cv_text),
+            "file_info": file_info,
+            "processing_method": "file_upload"
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except ValueError as e:
+        logger.error(f"File processing error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error analyzing CV file: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing CV file: {str(e)}")
 

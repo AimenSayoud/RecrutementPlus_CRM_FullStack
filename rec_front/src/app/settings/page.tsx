@@ -3,7 +3,7 @@
 
 import React, { useState } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser, selectCanAccess } from '@/store/useAuthStore';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -29,7 +29,8 @@ const validatePassword = (password: string): string => {
 
 const SettingsPage = () => {
   const { colors, theme, toggleTheme } = useTheme();
-  const { user: currentUser, canAccess } = useAuth();
+  const currentUser = useAuthStore(selectUser);
+  const canAccess = useAuthStore(selectCanAccess);
   
   // Determine which tabs user can access
   const isAdmin = canAccess('admin');

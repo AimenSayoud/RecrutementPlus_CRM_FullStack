@@ -1,6 +1,6 @@
 // src/components/auth/withRoleAccess.tsx
 import React, { ComponentType } from 'react';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectCanAccess } from '@/store/useAuthStore';
 import { useTheme } from '@/app/context/ThemeContext';
 import Button from '@/components/ui/Button';
 
@@ -13,7 +13,7 @@ export function withRoleAccess<P extends object>(
   requiredRole: WithRoleAccessProps['requiredRole']
 ) {
   const WithRoleAccess: React.FC<P> = (props) => {
-    const { canAccess } = useAuth();
+    const canAccess = useAuthStore(selectCanAccess);
     const { colors } = useTheme();
     
     const hasAccess = canAccess(requiredRole);

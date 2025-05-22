@@ -3,6 +3,16 @@ import api from '../api';
 import callOpenAIDirectly from './direct-client';
 
 export const resumeService = {
+  // CV File Analysis (New Method)
+  analyzeCvFile: async (file: File, onUploadProgress?: (progressEvent: any) => void) => {
+    try {
+      return await api.analyzeCvFile(file, onUploadProgress);
+    } catch (error) {
+      console.warn('Backend file analysis failed:', error);
+      throw error; // Don't fallback for file uploads, they need backend processing
+    }
+  },
+
   // CV Analysis
   analyzeCv: async (cvText: string) => {
     try {
