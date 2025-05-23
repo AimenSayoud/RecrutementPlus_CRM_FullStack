@@ -62,6 +62,89 @@ class Company(CompanyBase):
         from_attributes = True
 
 
+# Base schemas for Company Contact
+class CompanyContactBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    title: Optional[str] = Field(None, max_length=100)
+    email: EmailStr
+    phone: Optional[str] = Field(None, max_length=20)
+    is_primary: Optional[bool] = False
+
+
+class CompanyContactCreate(CompanyContactBase):
+    company_id: UUID
+
+
+class CompanyContactUpdate(CompanyContactBase):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    email: Optional[EmailStr] = None
+
+
+class CompanyContact(CompanyContactBase):
+    id: UUID
+    company_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Base schemas for Company Hiring Preferences
+class CompanyHiringPreferencesBase(BaseModel):
+    preferred_experience_years: Optional[str] = None
+    required_education: Optional[str] = None
+    culture_values: Optional[List[str]] = None
+    interview_process: Optional[List[str]] = None
+
+
+class CompanyHiringPreferencesCreate(CompanyHiringPreferencesBase):
+    company_id: UUID
+
+
+class CompanyHiringPreferencesUpdate(CompanyHiringPreferencesBase):
+    pass
+
+
+class CompanyHiringPreferences(CompanyHiringPreferencesBase):
+    id: UUID
+    company_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Base schemas for Recruitment History
+class RecruitmentHistoryBase(BaseModel):
+    job_title: str = Field(..., min_length=1, max_length=200)
+    date_filled: Optional[date] = None
+    time_to_fill: Optional[int] = Field(None, ge=0)  # Days
+    consultant_id: Optional[UUID] = None
+
+
+class RecruitmentHistoryCreate(RecruitmentHistoryBase):
+    company_id: UUID
+
+
+class RecruitmentHistoryUpdate(RecruitmentHistoryBase):
+    job_title: Optional[str] = Field(None, min_length=1, max_length=200)
+
+
+class RecruitmentHistory(RecruitmentHistoryBase):
+    id: UUID
+    company_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    
+    # Relationships
+    consultant_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 # Base schemas for Employer Profile
 class EmployerProfileBase(BaseModel):
     # Company role information

@@ -1,29 +1,8 @@
-import enum
 from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey, Integer, DECIMAL
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from .base import BaseModel
-
-
-class AdminStatus(str, enum.Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    SUSPENDED = "suspended"
-
-
-class AdminRole(str, enum.Enum):
-    SYSTEM_ADMIN = "system_admin"
-    USER_ADMIN = "user_admin"
-    CONTENT_ADMIN = "content_admin"
-    FINANCE_ADMIN = "finance_admin"
-    SUPPORT_ADMIN = "support_admin"
-
-
-class PermissionLevel(str, enum.Enum):
-    READ = "read"
-    WRITE = "write"
-    DELETE = "delete"
-    FULL_ACCESS = "full_access"
+from .enums import AdminStatus, AdminRole, PermissionLevel
 
 
 class AdminProfile(BaseModel):

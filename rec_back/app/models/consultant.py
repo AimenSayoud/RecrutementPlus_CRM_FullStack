@@ -1,15 +1,8 @@
-import enum
 from sqlalchemy import Column, String, Text, Integer, Boolean, DECIMAL, ForeignKey, DateTime, Table
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from .base import BaseModel
-
-
-class ConsultantStatus(str, enum.Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    ON_LEAVE = "on_leave"
-    SUSPENDED = "suspended"
+from .enums import ConsultantStatus
 
 
 class ConsultantProfile(BaseModel):
@@ -65,6 +58,16 @@ class ConsultantProfile(BaseModel):
     # Job assignments
     assigned_jobs = relationship("Job", back_populates="assigned_consultant")
     managed_applications = relationship("Application", back_populates="consultant")
+
+    # New relationships for candidates and clients
+    candidate_assignments = relationship("ConsultantCandidate", back_populates="consultant")
+    client_assignments = relationship("ConsultantClient", back_populates="consultant")
+    
+    # Recruitment history
+    recruitment_history = relationship("RecruitmentHistory", back_populates="consultant")
+    
+    # Application notes
+    application_notes = relationship("ApplicationNote", back_populates="consultant")
 
 
 # Association table for consultant skills (many-to-many)
@@ -134,3 +137,61 @@ class ConsultantPerformanceReview(BaseModel):
     # Relationships
     consultant = relationship("ConsultantProfile", backref="performance_reviews")
     reviewer = relationship("User", foreign_keys=[reviewer_id])
+
+
+class ConsultantCandidate(BaseModel):
+    """Association table for consultant-candidate assignments"""
+    __tablename__ = "consultant_candidates"
+    
+    consultant_id = Column(UUID(as_uuid=True), ForeignKey("consultant_profiles.id"), nullable=False)
+    candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidate_profiles.id"), nullable=False)
+    
+    # Assignment details
+    assigned_date = Column(DateTime, nullable=False)
+    unassigned_date = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    
+    # Assignment metadata
+    assignment_reason = Column(String(200), nullable=True)
+    notes = Column(Text, nullable=True)
+    
+    # Performance tracking
+    placement_count = Column(Integer, nullable=False, default=0)
+    interview_count = Column(Integer, nullable=False, default=0)
+    application_count = Column(Integer, nullable=False, default=0)
+    
+    # Relationships
+    consultant = relationship("ConsultantProfile", back_populates="candidate_assignments")
+    candidate = relationship("CandidateProfile", back_populates="consultant_assignments")
+
+
+class ConsultantClient(BaseModel):
+    """Association table for consultant-company client assignments"""
+    __tablename__ = "consultant_clients"
+    
+    consultant_id = Column(UUID(as_uuid=True), ForeignKey("consultant_profiles.id"), nullable=False)
+    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
+    
+    # Assignment details
+    assigned_date = Column(DateTime, nullable=False)
+    unassigned_date = Column(DateTime, nullable=True)
+    is_primary = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    
+    # Client relationship details
+    relationship_type = Column(String(50), nullable=True)  # exclusive, shared, project-based
+    contract_value = Column(DECIMAL(15, 2), nullable=True)
+    commission_rate = Column(DECIMAL(5, 4), nullable=True)  # Override consultant's default rate
+    
+    # Performance tracking
+    jobs_filled = Column(Integer, nullable=False, default=0)
+    active_jobs = Column(Integer, nullable=False, default=0)
+    total_placements = Column(Integer, nullable=False, default=0)
+    revenue_generated = Column(DECIMAL(15, 2), nullable=True)
+    
+    # Notes
+    notes = Column(Text, nullable=True)
+    
+    # Relationships
+    consultant = relationship("ConsultantProfile", back_populates="client_assignments")
+    company = relationship("Company", back_populates="consultant_assignments")

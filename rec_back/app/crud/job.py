@@ -6,7 +6,7 @@ from datetime import datetime, date
 
 from app.crud.base import CRUDBase
 from app.models.job import Job, JobSkillRequirement, JobStatus
-from app.models.employer import Company, EmployerProfile
+from app.models.company import Company, EmployerProfile
 from app.models.user import User
 from app.models.skill import Skill
 from app.models.application import Application, ApplicationStatus

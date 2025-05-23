@@ -1,15 +1,7 @@
 from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship
-import enum
 from app.models.base import BaseModel
-
-
-class UserRole(str, enum.Enum):
-    CANDIDATE = "candidate"
-    EMPLOYER = "employer"
-    CONSULTANT = "consultant"
-    ADMIN = "admin"
-    SUPERADMIN = "superadmin"
+from app.models.enums import UserRole, OfficeId
 
 
 class User(BaseModel):

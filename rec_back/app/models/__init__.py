@@ -1,11 +1,27 @@
 from .base import BaseModel, UUIDMixin, TimestampMixin
-from .user import User, UserRole
-from .candidate import CandidateProfile, Education, WorkExperience, CandidateJobPreference
-from .employer import EmployerProfile, Company
-from .job import Job, JobStatus, JobType, ExperienceLevel, JobSkillRequirement
+from .enums import (
+    UserRole, OfficeId, ContractType, ProficiencyLevel, JobStatus, JobType, 
+    ExperienceLevel, ApplicationStatus, CompanySize,
+    AdminStatus, AdminRole, PermissionLevel,
+    ConsultantStatus,
+    MessageType, MessageStatus, ConversationType
+)
+from .user import User
+from .candidate import (
+    CandidateProfile, CandidateEducation, CandidateExperience, 
+    CandidatePreferences, CandidateSkill, CandidateNotificationSettings
+)
+from .company import (
+    EmployerProfile, Company, CompanyContact, 
+    CompanyHiringPreferences, RecruitmentHistory
+)
+from .job import Job, JobSkillRequirement
 from .skill import Skill, SkillCategory
-from .application import Application, ApplicationStatus, ApplicationStatusHistory
-from .consultant import ConsultantProfile, ConsultantStatus, ConsultantTarget, ConsultantPerformanceReview
+from .application import Application, ApplicationStatusHistory, ApplicationNote
+from .consultant import (
+    ConsultantProfile, ConsultantStatus, ConsultantTarget, 
+    ConsultantPerformanceReview, ConsultantCandidate, ConsultantClient
+)
 from .messaging import (
     Conversation, Message, MessageAttachment, MessageReadReceipt, MessageReaction, 
     EmailTemplate, ConversationType, MessageType, MessageStatus
@@ -19,32 +35,41 @@ __all__ = [
     # Base
     "BaseModel", "UUIDMixin", "TimestampMixin",
     
+    # Enums
+    "UserRole", "OfficeId", "ContractType", "ProficiencyLevel", "JobStatus", "JobType", 
+    "ExperienceLevel", "ApplicationStatus", "CompanySize",
+    "AdminStatus", "AdminRole", "PermissionLevel",
+    "ConsultantStatus",
+    "MessageType", "MessageStatus", "ConversationType",
+    
     # User management
-    "User", "UserRole",
+    "User",
     
     # Candidate module
-    "CandidateProfile", "Education", "WorkExperience", "CandidateJobPreference",
+    "CandidateProfile", "CandidateEducation", "CandidateExperience", 
+    "CandidatePreferences", "CandidateSkill", "CandidateNotificationSettings",
     
     # Employer module
-    "EmployerProfile", "Company",
+    "EmployerProfile", "Company", "CompanyContact", 
+    "CompanyHiringPreferences", "RecruitmentHistory",
     
     # Job module
-    "Job", "JobStatus", "JobType", "ExperienceLevel", "JobSkillRequirement",
+    "Job", "JobSkillRequirement",
     
     # Skill module
     "Skill", "SkillCategory",
     
     # Application module
-    "Application", "ApplicationStatus", "ApplicationStatusHistory",
+    "Application", "ApplicationStatusHistory", "ApplicationNote",
     
     # Consultant module
-    "ConsultantProfile", "ConsultantStatus", "ConsultantTarget", "ConsultantPerformanceReview",
+    "ConsultantProfile", "ConsultantTarget", 
+    "ConsultantPerformanceReview", "ConsultantCandidate", "ConsultantClient",
     
     # Messaging module
     "Conversation", "Message", "MessageAttachment", "MessageReadReceipt", "MessageReaction",
-    "EmailTemplate", "ConversationType", "MessageType", "MessageStatus",
+    "EmailTemplate",
     
     # Admin module
     "AdminProfile", "SuperAdminProfile", "AdminAuditLog", "SystemConfiguration", "AdminNotification",
-    "AdminStatus", "AdminRole", "PermissionLevel",
 ]

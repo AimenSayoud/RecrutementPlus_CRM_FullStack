@@ -1,30 +1,8 @@
-import enum
 from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey, Table, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from .base import BaseModel
-
-
-class MessageType(str, enum.Enum):
-    TEXT = "text"
-    FILE = "file"
-    IMAGE = "image"
-    SYSTEM = "system"
-    TEMPLATE = "template"
-
-
-class MessageStatus(str, enum.Enum):
-    SENT = "sent"
-    DELIVERED = "delivered"
-    READ = "read"
-    FAILED = "failed"
-
-
-class ConversationType(str, enum.Enum):
-    DIRECT = "direct"
-    GROUP = "group"
-    BROADCAST = "broadcast"
-    SYSTEM = "system"
+from .enums import MessageType, MessageStatus, ConversationType
 
 
 # Association table for conversation participants (many-to-many)
@@ -120,6 +98,8 @@ class Message(BaseModel):
     reply_to = relationship("Message", remote_side="Message.id", foreign_keys=[reply_to_id])
     template = relationship("EmailTemplate", foreign_keys=[template_id])
     attachments = relationship("MessageAttachment", back_populates="message", cascade="all, delete-orphan")
+    read_receipts = relationship("MessageReadReceipt", back_populates="message", cascade="all, delete-orphan")
+    message_reactions = relationship("MessageReaction", back_populates="message", cascade="all, delete-orphan")
 
 
 class MessageAttachment(BaseModel):
@@ -155,7 +135,7 @@ class MessageReadReceipt(BaseModel):
     read_at = Column(DateTime, nullable=False)
     
     # Relationships
-    message = relationship("Message", backref="read_receipts")
+    message = relationship("Message", back_populates="read_receipts")
     user = relationship("User", backref="message_read_receipts")
 
 
@@ -167,7 +147,7 @@ class MessageReaction(BaseModel):
     emoji = Column(String(10), nullable=False)  # Unicode emoji or emoji code
     
     # Relationships
-    message = relationship("Message", backref="message_reactions")
+    message = relationship("Message", back_populates="message_reactions")
     user = relationship("User", backref="reactions")
 
 

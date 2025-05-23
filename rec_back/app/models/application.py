@@ -1,18 +1,8 @@
-from sqlalchemy import Column, String, Text, Date, ForeignKey, Enum as SQLEnum, DateTime
+from sqlalchemy import Column, String, Text, Date, ForeignKey, Enum as SQLEnum, DateTime, Integer, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
-import enum
 from app.models.base import BaseModel
-
-
-class ApplicationStatus(str, enum.Enum):
-    SUBMITTED = "Submitted"
-    UNDER_REVIEW_RECRUITMENTPLUS = "Under Review by RecrutementPlus"
-    PRESENTED_TO_EMPLOYER = "Presented to Employer"
-    INTERVIEW_SCHEDULED = "Interview Scheduled"
-    REJECTED = "Rejected"
-    OFFER_MADE = "Offer Made"
-    HIRED = "Hired"
+from app.models.enums import ApplicationStatus
 
 
 class Application(BaseModel):
@@ -20,13 +10,37 @@ class Application(BaseModel):
 
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidate_profiles.id"), nullable=False)
     job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=False)
+    consultant_id = Column(UUID(as_uuid=True), ForeignKey("consultant_profiles.id"), nullable=True)
+    
+    # Application details
     cover_letter = Column(Text, nullable=True)
-    application_date = Column(Date, nullable=False)
+    source = Column(String(100), nullable=True)  # website, referral, direct, etc.
+    
+    # Dates
+    applied_at = Column(DateTime, nullable=False, server_default=func.now())
+    last_updated = Column(DateTime, nullable=True, onupdate=func.now())
+    
+    # Status
     status = Column(SQLEnum(ApplicationStatus), default=ApplicationStatus.SUBMITTED, nullable=False)
+    
+    # Interview details
+    interview_date = Column(DateTime, nullable=True)
+    interview_type = Column(String(50), nullable=True)  # phone, video, in-person
+    
+    # Offer details
+    offer_salary = Column(Integer, nullable=True)
+    offer_currency = Column(String(3), nullable=True, default="GBP")
+    offer_date = Column(Date, nullable=True)
+    offer_expiry_date = Column(Date, nullable=True)
+    offer_response = Column(String(20), nullable=True)  # pending, accepted, rejected, negotiating
+    
+    # Notes
+    internal_notes = Column(Text, nullable=True)
 
     # Relationships
     candidate = relationship("CandidateProfile", back_populates="applications")
     job = relationship("Job", back_populates="applications")
+    consultant = relationship("ConsultantProfile", back_populates="managed_applications")
     status_history = relationship("ApplicationStatusHistory", back_populates="application", cascade="all, delete-orphan")
     notes = relationship("ApplicationNote", back_populates="application", cascade="all, delete-orphan")
 
@@ -38,10 +52,10 @@ class ApplicationStatusHistory(BaseModel):
     __tablename__ = "application_status_history"
 
     application_id = Column(UUID(as_uuid=True), ForeignKey("applications.id"), nullable=False)
-    status = Column(String, nullable=False)
+    status = Column(SQLEnum(ApplicationStatus), nullable=False)
     comment = Column(Text, nullable=True)
-    changed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    date_changed = Column(DateTime(timezone=True), nullable=False)
+    changed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    changed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
     application = relationship("Application", back_populates="status_history")

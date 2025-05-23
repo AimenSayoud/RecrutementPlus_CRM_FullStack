@@ -2,14 +2,21 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import and_, or_, desc, asc, func
 from uuid import UUID
+from datetime import datetime
 
 from app.crud.base import CRUDBase
-from app.models.employer import Company, EmployerProfile
+from app.models.company import (
+    Company, EmployerProfile, CompanyContact, 
+    CompanyHiringPreferences, RecruitmentHistory
+)
 from app.models.user import User
 from app.models.job import Job
 from app.schemas.employer import (
     CompanyCreate, CompanyUpdate, CompanySearchFilters,
-    EmployerProfileCreate, EmployerProfileUpdate, EmployerSearchFilters
+    EmployerProfileCreate, EmployerProfileUpdate, EmployerSearchFilters,
+    CompanyContactCreate, CompanyContactUpdate,
+    CompanyHiringPreferencesCreate, CompanyHiringPreferencesUpdate,
+    RecruitmentHistoryCreate, RecruitmentHistoryUpdate
 )
 
 
@@ -19,7 +26,9 @@ class CRUDCompany(CRUDBase[Company, CompanyCreate, CompanyUpdate]):
         return db.query(Company)\
             .options(
                 selectinload(Company.employer_profiles).joinedload(EmployerProfile.user),
-                selectinload(Company.jobs)
+                selectinload(Company.jobs),
+                selectinload(Company.contacts),
+                joinedload(Company.hiring_preferences)
             )\
             .filter(Company.id == id)\
             .first()
@@ -321,6 +330,114 @@ class CRUDEmployerProfile(CRUDBase[EmployerProfile, EmployerProfileCreate, Emplo
         return employer is not None
 
 
+class CRUDCompanyContact(CRUDBase[CompanyContact, CompanyContactCreate, CompanyContactUpdate]):
+    def get_by_company(self, db: Session, *, company_id: UUID) -> List[CompanyContact]:
+        """Get all contacts for a company"""
+        return db.query(CompanyContact)\
+            .filter(CompanyContact.company_id == company_id)\
+            .order_by(desc(CompanyContact.is_primary), asc(CompanyContact.name))\
+            .all()
+    
+    def get_primary_contact(self, db: Session, *, company_id: UUID) -> Optional[CompanyContact]:
+        """Get primary contact for a company"""
+        return db.query(CompanyContact)\
+            .filter(
+                and_(
+                    CompanyContact.company_id == company_id,
+                    CompanyContact.is_primary == True
+                )
+            )\
+            .first()
+    
+    def set_primary_contact(self, db: Session, *, contact_id: UUID) -> Optional[CompanyContact]:
+        """Set a contact as primary (and unset others)"""
+        contact = self.get(db, id=contact_id)
+        if not contact:
+            return None
+        
+        # Unset other primary contacts for this company
+        db.query(CompanyContact)\
+            .filter(
+                and_(
+                    CompanyContact.company_id == contact.company_id,
+                    CompanyContact.id != contact_id
+                )
+            )\
+            .update({"is_primary": False})
+        
+        contact.is_primary = True
+        db.commit()
+        db.refresh(contact)
+        return contact
+
+
+class CRUDCompanyHiringPreferences(CRUDBase[CompanyHiringPreferences, CompanyHiringPreferencesCreate, CompanyHiringPreferencesUpdate]):
+    def get_by_company(self, db: Session, *, company_id: UUID) -> Optional[CompanyHiringPreferences]:
+        """Get hiring preferences for a company"""
+        return db.query(CompanyHiringPreferences)\
+            .filter(CompanyHiringPreferences.company_id == company_id)\
+            .first()
+    
+    def create_or_update(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID, 
+        obj_in: CompanyHiringPreferencesUpdate
+    ) -> CompanyHiringPreferences:
+        """Create or update hiring preferences for a company"""
+        existing = self.get_by_company(db, company_id=company_id)
+        
+        if existing:
+            update_data = obj_in.dict(exclude_unset=True)
+            for field, value in update_data.items():
+                setattr(existing, field, value)
+            db.commit()
+            db.refresh(existing)
+            return existing
+        else:
+            create_data = CompanyHiringPreferencesCreate(
+                company_id=company_id,
+                **obj_in.dict(exclude_unset=True)
+            )
+            return self.create(db, obj_in=create_data)
+
+
+class CRUDRecruitmentHistory(CRUDBase[RecruitmentHistory, RecruitmentHistoryCreate, RecruitmentHistoryUpdate]):
+    def get_by_company(self, db: Session, *, company_id: UUID, skip: int = 0, limit: int = 100) -> List[RecruitmentHistory]:
+        """Get recruitment history for a company"""
+        return db.query(RecruitmentHistory)\
+            .options(joinedload(RecruitmentHistory.consultant))\
+            .filter(RecruitmentHistory.company_id == company_id)\
+            .order_by(desc(RecruitmentHistory.date_filled))\
+            .offset(skip)\
+            .limit(limit)\
+            .all()
+    
+    def get_by_consultant(self, db: Session, *, consultant_id: UUID, skip: int = 0, limit: int = 100) -> List[RecruitmentHistory]:
+        """Get recruitment history by consultant"""
+        return db.query(RecruitmentHistory)\
+            .options(joinedload(RecruitmentHistory.company))\
+            .filter(RecruitmentHistory.consultant_id == consultant_id)\
+            .order_by(desc(RecruitmentHistory.date_filled))\
+            .offset(skip)\
+            .limit(limit)\
+            .all()
+    
+    def get_average_time_to_fill(self, db: Session, *, company_id: Optional[UUID] = None) -> float:
+        """Get average time to fill positions"""
+        query = db.query(func.avg(RecruitmentHistory.time_to_fill))
+        
+        if company_id:
+            query = query.filter(RecruitmentHistory.company_id == company_id)
+        
+        result = query.scalar()
+        return float(result) if result else 0.0
+
+
 # Create CRUD instances
 company = CRUDCompany(Company)
 employer_profile = CRUDEmployerProfile(EmployerProfile)
+company_contact = CRUDCompanyContact(CompanyContact)
+company_hiring_preferences = CRUDCompanyHiringPreferences(CompanyHiringPreferences)
+recruitment_history = CRUDRecruitmentHistory(RecruitmentHistory)

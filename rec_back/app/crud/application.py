@@ -5,15 +5,16 @@ from uuid import UUID
 from datetime import datetime, date
 
 from app.crud.base import CRUDBase
-from app.models.application import Application, ApplicationStatus, ApplicationStatusHistory
+from app.models.application import Application, ApplicationStatus, ApplicationStatusHistory, ApplicationNote
 from app.models.candidate import CandidateProfile
 from app.models.job import Job
-from app.models.employer import Company
+from app.models.company import Company
 from app.models.user import User
 from app.schemas.application import (
     ApplicationCreate, ApplicationUpdate, ApplicationSearchFilters,
     ApplicationStatusHistoryCreate, BulkApplicationUpdate,
-    ApplicationStatusChange, ScheduleInterview, MakeOffer
+    ApplicationStatusChange, ScheduleInterview, MakeOffer,
+    ApplicationNoteCreate, ApplicationNoteUpdate
 )
 
 
@@ -25,7 +26,8 @@ class CRUDApplication(CRUDBase[Application, ApplicationCreate, ApplicationUpdate
                 joinedload(Application.candidate).joinedload(CandidateProfile.user),
                 joinedload(Application.job).joinedload(Job.company),
                 joinedload(Application.consultant),
-                selectinload(Application.status_history)
+                selectinload(Application.status_history),
+                selectinload(Application.notes)
             )\
             .filter(Application.id == id)\
             .first()
@@ -136,7 +138,8 @@ class CRUDApplication(CRUDBase[Application, ApplicationCreate, ApplicationUpdate
         """Get applications by candidate"""
         return db.query(Application)\
             .options(
-                joinedload(Application.job).joinedload(Job.company)
+                joinedload(Application.job).joinedload(Job.company),
+                joinedload(Application.consultant)
             )\
             .filter(Application.candidate_id == candidate_id)\
             .order_by(desc(Application.applied_at))\
@@ -148,7 +151,8 @@ class CRUDApplication(CRUDBase[Application, ApplicationCreate, ApplicationUpdate
         """Get applications by job"""
         return db.query(Application)\
             .options(
-                joinedload(Application.candidate).joinedload(CandidateProfile.user)
+                joinedload(Application.candidate).joinedload(CandidateProfile.user),
+                joinedload(Application.consultant)
             )\
             .filter(Application.job_id == job_id)\
             .order_by(desc(Application.applied_at))\
@@ -161,7 +165,8 @@ class CRUDApplication(CRUDBase[Application, ApplicationCreate, ApplicationUpdate
         return db.query(Application)\
             .options(
                 joinedload(Application.candidate).joinedload(CandidateProfile.user),
-                joinedload(Application.job).joinedload(Job.company)
+                joinedload(Application.job).joinedload(Job.company),
+                joinedload(Application.consultant)
             )\
             .filter(Application.status == status)\
             .order_by(desc(Application.applied_at))\
@@ -401,6 +406,46 @@ class CRUDApplicationStatusHistory(CRUDBase[ApplicationStatusHistory, Applicatio
         return status_history
 
 
+class CRUDApplicationNote(CRUDBase[ApplicationNote, ApplicationNoteCreate, ApplicationNoteUpdate]):
+    def get_by_application(self, db: Session, *, application_id: UUID) -> List[ApplicationNote]:
+        """Get all notes for an application"""
+        return db.query(ApplicationNote)\
+            .options(joinedload(ApplicationNote.consultant))\
+            .filter(ApplicationNote.application_id == application_id)\
+            .order_by(desc(ApplicationNote.created_at))\
+            .all()
+    
+    def get_by_consultant(self, db: Session, *, consultant_id: UUID, skip: int = 0, limit: int = 100) -> List[ApplicationNote]:
+        """Get all notes by a consultant"""
+        return db.query(ApplicationNote)\
+            .options(joinedload(ApplicationNote.application))\
+            .filter(ApplicationNote.consultant_id == consultant_id)\
+            .order_by(desc(ApplicationNote.created_at))\
+            .offset(skip)\
+            .limit(limit)\
+            .all()
+    
+    def create_note(
+        self, 
+        db: Session, 
+        *, 
+        application_id: UUID, 
+        consultant_id: UUID, 
+        note_text: str
+    ) -> ApplicationNote:
+        """Create a note for an application"""
+        note = ApplicationNote(
+            application_id=application_id,
+            consultant_id=consultant_id,
+            note_text=note_text
+        )
+        db.add(note)
+        db.commit()
+        db.refresh(note)
+        return note
+
+
 # Create CRUD instances
 application = CRUDApplication(Application)
 application_status_history = CRUDApplicationStatusHistory(ApplicationStatusHistory)
+application_note = CRUDApplicationNote(ApplicationNote)

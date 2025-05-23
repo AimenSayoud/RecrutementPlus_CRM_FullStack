@@ -1,28 +1,39 @@
 from sqlalchemy import Column, String, Text, Boolean, Date, Integer, ForeignKey, ARRAY, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-import enum
 from app.models.base import BaseModel
-
-
-class CompanySize(str, enum.Enum):
-    SMALL = "1-10"
-    MEDIUM_SMALL = "10-50"
-    MEDIUM = "50-200"
-    LARGE = "200-1000"
-    ENTERPRISE = "1000+"
+from app.models.enums import CompanySize
 
 
 class Company(BaseModel):
     __tablename__ = "companies"
 
     name = Column(String, nullable=False)
-    industry = Column(String, nullable=False)
-    size = Column(SQLEnum(CompanySize), nullable=False)
-    location = Column(String, nullable=False)
+    industry = Column(String, nullable=True)
+    size = Column(SQLEnum(CompanySize), nullable=True)
+    company_size = Column(SQLEnum(CompanySize), nullable=True)  # Alias for backward compatibility
+    location = Column(String, nullable=True)
     description = Column(Text, nullable=True)
     website = Column(String, nullable=True)
     logo_url = Column(String, nullable=True)
+    
+    # Additional fields to match schema
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    address = Column(String, nullable=True)
+    city = Column(String, nullable=True)
+    country = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
+    founded_year = Column(Integer, nullable=True)
+    registration_number = Column(String, nullable=True)
+    tax_id = Column(String, nullable=True)
+    cover_image_url = Column(String, nullable=True)
+    social_media = Column(JSONB, nullable=True)
+    is_verified = Column(Boolean, default=False, nullable=False)
+    is_premium = Column(Boolean, default=False, nullable=False)
+    notes = Column(Text, nullable=True)
+    total_employees = Column(Integer, default=0, nullable=True)
+    active_jobs = Column(Integer, default=0, nullable=True)
 
     # Relationships
     employer_profiles = relationship("EmployerProfile", back_populates="company", cascade="all, delete-orphan")
@@ -41,8 +52,19 @@ class EmployerProfile(BaseModel):
 
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False)
-    title = Column(String, nullable=True)  # HR Director, CEO, etc.
+    
+    # Job title and position
+    title = Column(String, nullable=True)  # Kept for backward compatibility
+    position = Column(String(200), nullable=True)  # HR Director, CEO, etc.
+    department = Column(String(200), nullable=True)
+    
+    # Permissions
     is_primary_contact = Column(Boolean, default=False, nullable=False)
+    can_post_jobs = Column(Boolean, default=True, nullable=False)
+    
+    # Statistics
+    jobs_posted = Column(Integer, default=0, nullable=False)
+    successful_hires = Column(Integer, default=0, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="employer_profiles")

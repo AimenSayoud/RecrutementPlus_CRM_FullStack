@@ -35,6 +35,59 @@ class CandidateJobPreference(CandidateJobPreferenceBase):
         from_attributes = True
 
 
+# Notification Settings schemas
+class CandidateNotificationSettingsBase(BaseModel):
+    email_alerts: Optional[bool] = True
+    job_matches: Optional[bool] = True
+    application_updates: Optional[bool] = True
+
+
+class CandidateNotificationSettingsCreate(CandidateNotificationSettingsBase):
+    candidate_id: UUID
+
+
+class CandidateNotificationSettingsUpdate(CandidateNotificationSettingsBase):
+    pass
+
+
+class CandidateNotificationSettings(CandidateNotificationSettingsBase):
+    id: UUID
+    candidate_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Candidate Skill schemas
+class CandidateSkillBase(BaseModel):
+    skill_id: UUID
+    proficiency_level: Optional[str] = Field(None, regex="^(beginner|intermediate|advanced|expert)$")
+    years_experience: Optional[int] = Field(None, ge=0, le=50)
+
+
+class CandidateSkillCreate(CandidateSkillBase):
+    candidate_id: UUID
+
+
+class CandidateSkillUpdate(CandidateSkillBase):
+    skill_id: Optional[UUID] = None
+
+
+class CandidateSkill(CandidateSkillBase):
+    id: UUID
+    candidate_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    
+    # Relationships
+    skill_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 # Education schemas
 class EducationBase(BaseModel):
     institution: str = Field(..., min_length=1, max_length=200)
@@ -162,6 +215,8 @@ class CandidateProfile(CandidateProfileBase):
     education: Optional[List[Education]] = None
     work_experience: Optional[List[WorkExperience]] = None
     job_preferences: Optional[CandidateJobPreference] = None
+    skills: Optional[List[CandidateSkill]] = None
+    notification_settings: Optional[CandidateNotificationSettings] = None
 
     class Config:
         from_attributes = True

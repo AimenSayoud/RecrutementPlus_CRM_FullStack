@@ -2,7 +2,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 from pydantic import BaseModel, Field, validator
 from uuid import UUID
-from app.models.application import ApplicationStatus
+from app.models.enums import ApplicationStatus
 
 
 # Base schemas for Application Status History
@@ -23,6 +23,35 @@ class ApplicationStatusHistory(ApplicationStatusHistoryBase):
     
     # Changed by user info (populated via join)
     changed_by_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# Base schemas for Application Notes
+class ApplicationNoteBase(BaseModel):
+    note_text: str = Field(..., min_length=1)
+    is_private: Optional[bool] = False
+
+
+class ApplicationNoteCreate(ApplicationNoteBase):
+    application_id: UUID
+    consultant_id: UUID
+
+
+class ApplicationNoteUpdate(ApplicationNoteBase):
+    note_text: Optional[str] = Field(None, min_length=1)
+
+
+class ApplicationNote(ApplicationNoteBase):
+    id: UUID
+    application_id: UUID
+    consultant_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    
+    # Relationships
+    consultant_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -88,6 +117,7 @@ class Application(ApplicationBase):
     
     # Relationships
     status_history: Optional[List[ApplicationStatusHistory]] = None
+    notes: Optional[List[ApplicationNote]] = None
 
     class Config:
         from_attributes = True

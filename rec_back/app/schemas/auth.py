@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime
-from app.models.user import UserRole, OfficeId
+from app.models.enums import UserRole, OfficeId
 
 # Request schemas
 class LoginRequest(BaseModel):
