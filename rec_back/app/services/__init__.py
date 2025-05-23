@@ -6,6 +6,7 @@ from .application import application_service, ApplicationService
 from .company import company_service, CompanyService
 from .consultant import consultant_service, ConsultantService
 from .notification import notification_service, NotificationService, NotificationType, NotificationChannel
+from .analytics import analytics_service, AnalyticsService
 
 __all__ = [
     # Base
@@ -40,4 +41,8 @@ __all__ = [
     "NotificationService",
     "NotificationType",
     "NotificationChannel",
+    
+    # Analytics
+    "analytics_service",
+    "AnalyticsService",
 ]

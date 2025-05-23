@@ -1,560 +1,661 @@
-from typing import Optional, List, Dict, Any
+# app/services/job.py
+from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, func, case
 from uuid import UUID
-import logging
-from datetime import datetime, date
+from datetime import datetime, timedelta
 
-from app.models.job import Job, JobStatus
-from app.models.company import Company, EmployerProfile
-from app.models.user import User, UserRole
+from app.models.job import Job, JobSkillRequirement
 from app.models.skill import Skill
+from app.models.application import Application
+from app.models.candidate import CandidateProfile, CandidateSkill
+from app.models.company import Company
 from app.schemas.job import (
-    JobCreate, JobUpdate, JobWithDetails,
-    JobSearchFilters, JobSkillRequirementCreate
+    JobCreate, JobUpdate, JobSearchFilters,
+    JobSkillRequirementCreate
 )
-from app.crud import (
-    job as job_crud,
-    job_skill_requirement as job_skill_crud,
-    company as company_crud,
-    employer_profile as employer_crud
-)
+from app.crud import job as job_crud
 from app.services.base import BaseService
 
-logger = logging.getLogger(__name__)
 
-
-class JobService(BaseService[Job, type(job_crud)]):
-    """Service for handling job operations"""
+class JobService(BaseService[Job, job_crud.CRUDJob]):
+    """Service for job posting and matching operations"""
     
     def __init__(self):
-        super().__init__(job_crud)
-        self.job_skill_crud = job_skill_crud
-        self.company_crud = company_crud
-        self.employer_crud = employer_crud
+        super().__init__(job_crud.job)
+        self.skill_requirement_crud = job_crud.job_skill_requirement
     
-    def create_job(
-        self,
-        db: Session,
-        *,
+    def create_job_with_skills(
+        self, 
+        db: Session, 
+        *, 
         job_data: JobCreate,
-        posted_by_user_id: UUID,
-        auto_publish: bool = False
-    ) -> Optional[Job]:
-        """
-        Create a new job posting
+        skills: List[Dict[str, Any]],
+        posted_by: UUID
+    ) -> Job:
+        """Create job posting with skill requirements"""
+        # Validate user can post for this company
+        from app.crud.employer import employer_profile
+        can_post = employer_profile.get_hiring_permissions(
+            db, 
+            user_id=posted_by,
+            company_id=job_data.company_id
+        )
         
-        Args:
-            db: Database session
-            job_data: Job data
-            posted_by_user_id: User ID who is posting the job
-            auto_publish: Whether to automatically publish the job
-            
-        Returns:
-            Created job or None if validation fails
-        """
-        logger.info(f"Creating job for company {job_data.company_id} by user {posted_by_user_id}")
-        
-        # Verify user has permission to post jobs for this company
-        if not self._verify_posting_permission(db, user_id=posted_by_user_id, company_id=job_data.company_id):
-            logger.error(f"User {posted_by_user_id} does not have permission to post jobs for company {job_data.company_id}")
-            return None
-        
-        # Set posted_by
-        job_data.posted_by = posted_by_user_id
-        
-        # Set initial status
-        if auto_publish:
-            job_data.status = JobStatus.OPEN
-            job_data.posting_date = date.today()
-        else:
-            job_data.status = JobStatus.DRAFT
+        if not can_post:
+            raise ValueError("User does not have permission to post jobs for this company")
         
         # Create job
-        job = self.crud.create(db, obj_in=job_data)
+        job_data_dict = job_data.dict()
+        job_data_dict["posted_by"] = posted_by
+        job = self.crud.create(db, obj_in=JobCreate(**job_data_dict))
         
-        # Update company active jobs count
-        self.company_crud.update_job_counts(db, company_id=job.company_id)
+        # Add skill requirements
+        if skills:
+            self._add_job_skills(db, job_id=job.id, skills=skills)
         
-        logger.info(f"Successfully created job {job.id}")
-        return job
-    
-    def update_job(
-        self,
-        db: Session,
-        *,
-        job_id: UUID,
-        job_data: JobUpdate,
-        updated_by_user_id: UUID
-    ) -> Optional[Job]:
-        """
-        Update a job posting
+        # Update company job count
+        self._update_company_job_count(db, company_id=job.company_id)
         
-        Args:
-            db: Database session
-            job_id: Job ID
-            job_data: Update data
-            updated_by_user_id: User ID who is updating
-            
-        Returns:
-            Updated job or None if validation fails
-        """
-        logger.info(f"Updating job {job_id}")
-        
-        # Get existing job
-        job = self.crud.get(db, id=job_id)
-        if not job:
-            return None
-        
-        # Verify permission
-        if not self._verify_posting_permission(db, user_id=updated_by_user_id, company_id=job.company_id):
-            logger.error(f"User {updated_by_user_id} does not have permission to update job {job_id}")
-            return None
-        
-        # Update job
-        job = self.crud.update(db, id=job_id, obj_in=job_data)
-        
-        # Update company active jobs count if status changed
-        if job and "status" in job_data.dict(exclude_unset=True):
-            self.company_crud.update_job_counts(db, company_id=job.company_id)
+        # Log job creation
+        self.log_action(
+            "job_created",
+            user_id=posted_by,
+            details={
+                "job_id": str(job.id),
+                "title": job.title,
+                "company_id": str(job.company_id)
+            }
+        )
         
         return job
     
-    def publish_job(
-        self,
-        db: Session,
-        *,
+    def update_job_with_skills(
+        self, 
+        db: Session, 
+        *, 
         job_id: UUID,
-        published_by_user_id: UUID
+        job_update: JobUpdate,
+        skills: Optional[List[Dict[str, Any]]] = None,
+        updated_by: UUID
     ) -> Optional[Job]:
-        """
-        Publish a draft job
-        
-        Args:
-            db: Database session
-            job_id: Job ID
-            published_by_user_id: User ID who is publishing
-            
-        Returns:
-            Published job or None if validation fails
-        """
-        logger.info(f"Publishing job {job_id}")
-        
-        job = self.crud.get(db, id=job_id)
+        """Update job posting and skill requirements"""
+        job = self.get(db, id=job_id)
         if not job:
             return None
         
-        if job.status != JobStatus.DRAFT:
-            logger.warning(f"Job {job_id} is not in draft status")
-            return job
+        # Update job details
+        job = self.crud.update(db, db_obj=job, obj_in=job_update)
         
-        # Verify permission
-        if not self._verify_posting_permission(db, user_id=published_by_user_id, company_id=job.company_id):
-            logger.error(f"User {published_by_user_id} does not have permission to publish job {job_id}")
-            return None
-        
-        # Publish job
-        update_data = {
-            "status": JobStatus.OPEN,
-            "posting_date": date.today()
-        }
-        
-        job = self.crud.update(db, id=job_id, obj_in=update_data)
-        
-        # Update company active jobs count
-        self.company_crud.update_job_counts(db, company_id=job.company_id)
-        
-        logger.info(f"Successfully published job {job_id}")
-        return job
-    
-    def close_job(
-        self,
-        db: Session,
-        *,
-        job_id: UUID,
-        closed_by_user_id: UUID,
-        reason: Optional[str] = None
-    ) -> Optional[Job]:
-        """
-        Close a job posting
-        
-        Args:
-            db: Database session
-            job_id: Job ID
-            closed_by_user_id: User ID who is closing
-            reason: Optional reason for closing
-            
-        Returns:
-            Closed job or None if validation fails
-        """
-        logger.info(f"Closing job {job_id}")
-        
-        job = self.crud.get(db, id=job_id)
-        if not job:
-            return None
-        
-        if job.status not in [JobStatus.OPEN, JobStatus.DRAFT]:
-            logger.warning(f"Job {job_id} cannot be closed from status {job.status}")
-            return job
-        
-        # Verify permission
-        if not self._verify_posting_permission(db, user_id=closed_by_user_id, company_id=job.company_id):
-            logger.error(f"User {closed_by_user_id} does not have permission to close job {job_id}")
-            return None
-        
-        # Close job
-        update_data = {"status": JobStatus.CLOSED}
-        
-        job = self.crud.update(db, id=job_id, obj_in=update_data)
-        
-        # Update company active jobs count
-        self.company_crud.update_job_counts(db, company_id=job.company_id)
-        
-        # Log reason if provided
-        if reason:
-            self.log_action(
-                "job_closed",
-                user_id=closed_by_user_id,
-                details={"job_id": str(job_id), "reason": reason}
+        # Update skills if provided
+        if skills is not None:
+            self.skill_requirement_crud.update_job_skills(
+                db,
+                job_id=job_id,
+                skill_requirements=[
+                    JobSkillRequirementCreate(**skill) 
+                    for skill in skills
+                ]
             )
         
-        logger.info(f"Successfully closed job {job_id}")
+        # Log update
+        self.log_action(
+            "job_updated",
+            user_id=updated_by,
+            details={"job_id": str(job_id)}
+        )
+        
         return job
     
-    def update_job_skills(
-        self,
-        db: Session,
-        *,
+    def find_matching_candidates(
+        self, 
+        db: Session, 
+        *, 
         job_id: UUID,
-        skill_requirements: List[JobSkillRequirementCreate],
-        updated_by_user_id: UUID
-    ) -> Optional[List[Any]]:
-        """
-        Update job skill requirements
-        
-        Args:
-            db: Database session
-            job_id: Job ID
-            skill_requirements: List of skill requirements
-            updated_by_user_id: User ID who is updating
-            
-        Returns:
-            List of skill requirements or None if validation fails
-        """
-        logger.info(f"Updating skills for job {job_id}")
-        
-        job = self.crud.get(db, id=job_id)
-        if not job:
-            return None
-        
-        # Verify permission
-        if not self._verify_posting_permission(db, user_id=updated_by_user_id, company_id=job.company_id):
-            logger.error(f"User {updated_by_user_id} does not have permission to update job {job_id}")
-            return None
-        
-        # Update skills
-        skills = self.job_skill_crud.update_job_skills(
-            db,
-            job_id=job_id,
-            skill_requirements=skill_requirements
-        )
-        
-        return skills
-    
-    def search_jobs(
-        self,
-        db: Session,
-        *,
-        filters: JobSearchFilters
-    ) -> tuple[List[Job], int]:
-        """
-        Search jobs with filters
-        
-        Args:
-            db: Database session
-            filters: Search filters
-            
-        Returns:
-            Tuple of (jobs, total_count)
-        """
-        logger.info(f"Searching jobs with filters: {filters}")
-        return self.crud.get_multi_with_search(db, filters=filters)
-    
-    def get_job_with_details(
-        self,
-        db: Session,
-        *,
-        job_id: UUID,
-        increment_views: bool = False
-    ) -> Optional[JobWithDetails]:
-        """
-        Get job with all details
-        
-        Args:
-            db: Database session
-            job_id: Job ID
-            increment_views: Whether to increment view count
-            
-        Returns:
-            Job with details
-        """
-        logger.debug(f"Getting job details for {job_id}")
-        
-        # Increment view count if requested
-        if increment_views:
-            self.crud.increment_view_count(db, job_id=job_id)
-        
+        limit: int = 50
+    ) -> List[Tuple[CandidateProfile, float]]:
+        """Find candidates matching job requirements"""
         job = self.crud.get_with_details(db, id=job_id)
         if not job:
-            return None
+            return []
         
-        # Build response
-        job_details = JobWithDetails(
-            id=job.id,
-            company_id=job.company_id,
-            company_name=job.company.name if job.company else None,
-            posted_by=job.posted_by,
-            posted_by_name=job.posted_by_user.full_name if job.posted_by_user else None,
-            assigned_consultant_id=job.assigned_consultant_id,
-            assigned_consultant_name=job.assigned_consultant.user.full_name if job.assigned_consultant else None,
-            title=job.title,
-            description=job.description,
-            responsibilities=job.responsibilities,
-            requirements=job.requirements,
-            location=job.location,
-            is_remote=job.is_remote,
-            is_hybrid=job.is_hybrid,
-            job_type=job.job_type,
-            experience_level=job.experience_level,
-            salary_min=job.salary_min,
-            salary_max=job.salary_max,
-            salary_currency=job.salary_currency,
-            deadline=job.deadline,
-            start_date=job.start_date,
-            benefits=job.benefits,
-            company_culture=job.company_culture,
-            is_featured=job.is_featured,
-            requires_cover_letter=job.requires_cover_letter,
-            status=job.status,
-            application_count=job.application_count,
-            view_count=job.view_count,
-            created_at=job.created_at,
-            updated_at=job.updated_at,
-            skill_requirements=job.skill_requirements
-        )
+        # Get job skill requirements
+        job_skill_ids = [sr.skill_id for sr in job.skill_requirements]
         
-        return job_details
+        # Base query for active candidates
+        candidates = db.query(CandidateProfile).filter(
+            CandidateProfile.profile_completed == True
+        ).all()
+        
+        # Calculate match scores
+        candidate_scores = []
+        for candidate in candidates:
+            score = self._calculate_candidate_match_score(
+                job, 
+                candidate,
+                job_skill_ids
+            )
+            if score > 0.3:  # Minimum threshold
+                candidate_scores.append((candidate, score))
+        
+        # Sort by score and return top matches
+        candidate_scores.sort(key=lambda x: x[1], reverse=True)
+        return candidate_scores[:limit]
     
-    def get_company_jobs(
-        self,
-        db: Session,
-        *,
-        company_id: UUID,
-        include_closed: bool = False,
-        skip: int = 0,
-        limit: int = 100
-    ) -> List[Job]:
-        """
-        Get jobs for a company
-        
-        Args:
-            db: Database session
-            company_id: Company ID
-            include_closed: Whether to include closed jobs
-            skip: Number of records to skip
-            limit: Maximum number of records
-            
-        Returns:
-            List of jobs
-        """
-        logger.debug(f"Getting jobs for company {company_id}")
-        
-        jobs = self.crud.get_by_company(db, company_id=company_id, skip=skip, limit=limit)
-        
-        if not include_closed:
-            jobs = [job for job in jobs if job.status != JobStatus.CLOSED]
-        
-        return jobs
-    
-    def get_job_statistics(
-        self,
-        db: Session,
-        *,
+    def get_job_analytics(
+        self, 
+        db: Session, 
+        *, 
         job_id: UUID
     ) -> Dict[str, Any]:
-        """
-        Get job statistics
-        
-        Args:
-            db: Database session
-            job_id: Job ID
-            
-        Returns:
-            Dictionary of statistics
-        """
-        logger.debug(f"Getting statistics for job {job_id}")
-        
-        job = self.crud.get(db, id=job_id)
+        """Get comprehensive job posting analytics"""
+        job = self.get(db, id=job_id)
         if not job:
             return {}
         
         # Get application summary
         app_summary = self.crud.get_application_summary(db, job_id=job_id)
         
-        # Calculate conversion rates
-        total_apps = app_summary.get("total_applications", 0)
-        interview_rate = (app_summary.get("interviewed", 0) / total_apps * 100) if total_apps > 0 else 0
-        offer_rate = (app_summary.get("offered", 0) / total_apps * 100) if total_apps > 0 else 0
-        hire_rate = (app_summary.get("hired", 0) / total_apps * 100) if total_apps > 0 else 0
-        
-        # Days since posting
-        days_active = (date.today() - job.posting_date).days if job.posting_date else 0
-        
-        return {
-            "job_id": str(job_id),
-            "status": job.status.value,
-            "view_count": job.view_count or 0,
-            "application_summary": app_summary,
-            "conversion_rates": {
-                "interview_rate": round(interview_rate, 2),
-                "offer_rate": round(offer_rate, 2),
-                "hire_rate": round(hire_rate, 2)
-            },
-            "days_active": days_active,
-            "applications_per_day": round(total_apps / days_active, 2) if days_active > 0 else 0
+        # Calculate additional metrics
+        analytics = {
+            "job_id": job_id,
+            "title": job.title,
+            "status": job.status,
+            "posted_date": job.created_at,
+            "days_active": (datetime.utcnow() - job.created_at).days,
+            "view_count": job.view_count,
+            "application_count": job.application_count,
+            "view_to_application_rate": (
+                (job.application_count / job.view_count * 100) 
+                if job.view_count > 0 else 0
+            ),
+            "applications": app_summary,
+            "source_effectiveness": self._get_source_effectiveness(db, job_id),
+            "candidate_quality_metrics": self._get_candidate_quality_metrics(db, job_id),
+            "time_to_fill_estimate": self._estimate_time_to_fill(db, job)
         }
+        
+        return analytics
     
     def get_similar_jobs(
-        self,
-        db: Session,
-        *,
+        self, 
+        db: Session, 
+        *, 
         job_id: UUID,
-        limit: int = 5
+        limit: int = 10
     ) -> List[Job]:
-        """
-        Get similar jobs based on skills and requirements
-        
-        Args:
-            db: Database session
-            job_id: Job ID
-            limit: Maximum number of similar jobs
-            
-        Returns:
-            List of similar jobs
-        """
-        logger.debug(f"Getting similar jobs for {job_id}")
-        
+        """Find similar job postings"""
         job = self.crud.get_with_details(db, id=job_id)
         if not job:
             return []
         
         # Get job skills
-        skill_ids = [req.skill_id for req in job.skill_requirements] if job.skill_requirements else []
+        job_skill_ids = [sr.skill_id for sr in job.skill_requirements]
         
-        if not skill_ids:
-            # Fallback to same company or location
-            filters = JobSearchFilters(
-                company_id=job.company_id,
-                location=job.location,
-                status=JobStatus.OPEN,
-                page_size=limit
+        # Find jobs with similar skills
+        similar_jobs_query = db.query(
+            Job,
+            func.count(JobSkillRequirement.skill_id).label('skill_match')
+        ).join(
+            JobSkillRequirement,
+            JobSkillRequirement.job_id == Job.id
+        ).filter(
+            and_(
+                Job.id != job_id,
+                Job.status == "open",
+                JobSkillRequirement.skill_id.in_(job_skill_ids)
             )
-        else:
-            # Search by skills
-            skill_names = db.query(Skill.name).filter(Skill.id.in_(skill_ids)).all()
-            skill_names = [s[0] for s in skill_names]
-            
-            filters = JobSearchFilters(
-                skills=skill_names,
-                status=JobStatus.OPEN,
-                page_size=limit + 1  # Get one extra to exclude current job
-            )
-        
-        similar_jobs, _ = self.crud.get_multi_with_search(db, filters=filters)
-        
-        # Exclude current job
-        similar_jobs = [j for j in similar_jobs if j.id != job_id][:limit]
-        
-        return similar_jobs
-    
-    def _verify_posting_permission(
-        self,
-        db: Session,
-        *,
-        user_id: UUID,
-        company_id: UUID
-    ) -> bool:
-        """
-        Verify if user has permission to post/update jobs for company
-        
-        Args:
-            db: Database session
-            user_id: User ID
-            company_id: Company ID
-            
-        Returns:
-            True if user has permission, False otherwise
-        """
-        # Check if user is an employer for this company
-        employer = self.employer_crud.get_hiring_permissions(
-            db,
-            user_id=user_id,
-            company_id=company_id
+        ).group_by(
+            Job.id
+        ).order_by(
+            func.count(JobSkillRequirement.skill_id).desc()
         )
         
-        if employer:
-            return True
+        # Add filters for similar attributes
+        if job.experience_level:
+            similar_jobs_query = similar_jobs_query.filter(
+                Job.experience_level == job.experience_level
+            )
         
-        # Check if user is admin/superadmin
-        user = db.query(User).filter(User.id == user_id).first()
-        if user and user.role in [UserRole.ADMIN, UserRole.SUPERADMIN]:
-            return True
+        similar_jobs = similar_jobs_query.limit(limit).all()
         
-        return False
+        return [job for job, _ in similar_jobs]
     
-    def assign_consultant(
-        self,
-        db: Session,
-        *,
-        job_id: UUID,
-        consultant_id: UUID,
-        assigned_by_user_id: UUID
-    ) -> Optional[Job]:
-        """
-        Assign a consultant to a job
-        
-        Args:
-            db: Database session
-            job_id: Job ID
-            consultant_id: Consultant ID
-            assigned_by_user_id: User who is assigning
-            
-        Returns:
-            Updated job
-        """
-        logger.info(f"Assigning consultant {consultant_id} to job {job_id}")
-        
-        job = self.crud.get(db, id=job_id)
+    def optimize_job_posting(
+        self, 
+        db: Session, 
+        *, 
+        job_id: UUID
+    ) -> Dict[str, Any]:
+        """Provide optimization suggestions for job posting"""
+        job = self.crud.get_with_details(db, id=job_id)
         if not job:
-            return None
+            return {}
         
-        # Verify permission
-        if not self._verify_posting_permission(db, user_id=assigned_by_user_id, company_id=job.company_id):
-            logger.error(f"User {assigned_by_user_id} does not have permission to assign consultant to job {job_id}")
-            return None
+        suggestions = {
+            "title_optimization": [],
+            "description_improvements": [],
+            "skill_recommendations": [],
+            "salary_insights": {},
+            "posting_time_recommendations": []
+        }
         
-        # Update job
-        job = self.crud.update(db, id=job_id, obj_in={"assigned_consultant_id": consultant_id})
+        # Title optimization
+        if len(job.title) < 10:
+            suggestions["title_optimization"].append(
+                "Consider a more descriptive job title"
+            )
         
-        # Create consultant-client relationship if not exists
-        from app.crud import consultant_client as consultant_client_crud
-        consultant_client_crud.assign_client(
-            db,
-            consultant_id=consultant_id,
-            company_id=job.company_id,
-            notes=f"Assigned via job {job.title}"
+        # Description analysis
+        if job.description and len(job.description) < 200:
+            suggestions["description_improvements"].append(
+                "Add more details about responsibilities and requirements"
+            )
+        
+        # Skill recommendations
+        suggestions["skill_recommendations"] = self._recommend_additional_skills(
+            db, job
         )
         
-        return job
+        # Salary insights
+        suggestions["salary_insights"] = self._get_salary_insights(
+            db, job
+        )
+        
+        # Performance predictions
+        if job.view_count < 100 and job.created_at < datetime.utcnow() - timedelta(days=7):
+            suggestions["posting_time_recommendations"].append(
+                "Consider promoting this job posting for better visibility"
+            )
+        
+        return suggestions
+    
+    def get_market_insights(
+        self, 
+        db: Session, 
+        *, 
+        job_title: Optional[str] = None,
+        location: Optional[str] = None,
+        skills: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Get market insights for job posting"""
+        insights = {
+            "demand_trends": {},
+            "salary_ranges": {},
+            "skill_popularity": {},
+            "competition_level": {},
+            "recommendations": []
+        }
+        
+        # Build base query
+        query = db.query(Job).filter(Job.status == "open")
+        
+        if job_title:
+            query = query.filter(Job.title.ilike(f"%{job_title}%"))
+        
+        if location:
+            query = query.filter(Job.location.ilike(f"%{location}%"))
+        
+        similar_jobs = query.all()
+        
+        if similar_jobs:
+            # Calculate salary ranges
+            salaries = [
+                (j.salary_min, j.salary_max) 
+                for j in similar_jobs 
+                if j.salary_min or j.salary_max
+            ]
+            
+            if salaries:
+                min_salaries = [s[0] for s in salaries if s[0]]
+                max_salaries = [s[1] for s in salaries if s[1]]
+                
+                insights["salary_ranges"] = {
+                    "min_average": sum(min_salaries) / len(min_salaries) if min_salaries else 0,
+                    "max_average": sum(max_salaries) / len(max_salaries) if max_salaries else 0,
+                    "sample_size": len(salaries)
+                }
+            
+            # Competition level
+            insights["competition_level"] = {
+                "total_similar_jobs": len(similar_jobs),
+                "posted_last_week": sum(
+                    1 for j in similar_jobs 
+                    if j.created_at > datetime.utcnow() - timedelta(days=7)
+                ),
+                "average_applications": sum(
+                    j.application_count for j in similar_jobs
+                ) / len(similar_jobs) if similar_jobs else 0
+            }
+        
+        # Skill popularity
+        if skills:
+            skill_counts = db.query(
+                Skill.name,
+                func.count(JobSkillRequirement.job_id).label('demand')
+            ).join(
+                JobSkillRequirement,
+                JobSkillRequirement.skill_id == Skill.id
+            ).filter(
+                Skill.name.in_(skills)
+            ).group_by(
+                Skill.name
+            ).all()
+            
+            insights["skill_popularity"] = {
+                skill: count for skill, count in skill_counts
+            }
+        
+        return insights
+    
+    def close_job_with_reason(
+        self, 
+        db: Session, 
+        *, 
+        job_id: UUID,
+        reason: str,
+        closed_by: UUID
+    ) -> bool:
+        """Close job posting with reason"""
+        job = self.get(db, id=job_id)
+        if not job:
+            return False
+        
+        # Update status
+        job.status = "closed"
+        
+        # Log closure
+        self.log_action(
+            "job_closed",
+            user_id=closed_by,
+            details={
+                "job_id": str(job_id),
+                "reason": reason
+            }
+        )
+        
+        # Notify active applicants
+        # This would trigger notification service
+        
+        db.commit()
+        return True
+    
+    def _add_job_skills(
+        self, 
+        db: Session, 
+        job_id: UUID, 
+        skills: List[Dict[str, Any]]
+    ):
+        """Add skill requirements to job"""
+        for skill_data in skills:
+            # Validate skill exists
+            skill = db.query(Skill).filter(
+                Skill.name.ilike(skill_data.get("skill_name", ""))
+            ).first()
+            
+            if skill:
+                requirement = JobSkillRequirement(
+                    job_id=job_id,
+                    skill_id=skill.id,
+                    is_required=skill_data.get("is_required", True),
+                    proficiency_level=skill_data.get("proficiency_level"),
+                    years_experience=skill_data.get("years_experience")
+                )
+                db.add(requirement)
+        
+        db.commit()
+    
+    def _update_company_job_count(self, db: Session, company_id: UUID):
+        """Update company's active job count"""
+        from app.crud.employer import company as company_crud
+        company_crud.update_job_counts(db, company_id=company_id)
+    
+    def _calculate_candidate_match_score(
+        self,
+        job: Job,
+        candidate: CandidateProfile,
+        job_skill_ids: List[UUID]
+    ) -> float:
+        """Calculate match score between job and candidate"""
+        score = 0.0
+        
+        # Skill match (40%)
+        if job_skill_ids and candidate.skills:
+            candidate_skill_ids = [cs.skill_id for cs in candidate.skills]
+            skill_match = len(
+                set(job_skill_ids) & set(candidate_skill_ids)
+            ) / len(job_skill_ids)
+            score += skill_match * 0.4
+        
+        # Experience match (30%)
+        if candidate.years_of_experience is not None:
+            exp_score = self._match_experience_level(
+                candidate.years_of_experience,
+                job.experience_level
+            )
+            score += exp_score * 0.3
+        
+        # Location match (20%)
+        if candidate.preferences:
+            # Check location preferences
+            if job.is_remote and candidate.preferences.remote_work:
+                score += 0.2
+            elif candidate.preferences.locations:
+                if any(
+                    loc in job.location 
+                    for loc in candidate.preferences.locations
+                ):
+                    score += 0.2
+        
+        # Availability (10%)
+        if candidate.preferences and candidate.preferences.availability_date:
+            if candidate.preferences.availability_date <= datetime.utcnow().date():
+                score += 0.1
+        
+        return score
+    
+    def _match_experience_level(
+        self,
+        candidate_years: int,
+        job_level: Optional[str]
+    ) -> float:
+        """Match candidate experience with job level"""
+        if not job_level:
+            return 0.5
+        
+        level_ranges = {
+            "entry_level": (0, 2),
+            "junior": (1, 3),
+            "mid_level": (3, 6),
+            "senior": (5, 10),
+            "lead": (8, 15),
+            "principal": (10, None)
+        }
+        
+        if job_level in level_ranges:
+            min_exp, max_exp = level_ranges[job_level]
+            if max_exp is None:
+                return 1.0 if candidate_years >= min_exp else 0.5
+            elif min_exp <= candidate_years <= max_exp:
+                return 1.0
+            else:
+                # Partial match if close
+                if candidate_years < min_exp:
+                    return max(0, 1 - (min_exp - candidate_years) / min_exp)
+                else:
+                    return max(0, 1 - (candidate_years - max_exp) / max_exp)
+        
+        return 0.5
+    
+    def _get_source_effectiveness(
+        self, 
+        db: Session, 
+        job_id: UUID
+    ) -> Dict[str, Any]:
+        """Analyze application source effectiveness"""
+        sources = db.query(
+            Application.source,
+            func.count(Application.id).label('total'),
+            func.sum(
+                case(
+                    (Application.status.in_(["interviewed", "offered", "hired"]), 1),
+                    else_=0
+                )
+            ).label('quality')
+        ).filter(
+            Application.job_id == job_id
+        ).group_by(
+            Application.source
+        ).all()
+        
+        return [
+            {
+                "source": source or "direct",
+                "total": total,
+                "quality_rate": (quality / total * 100) if total > 0 else 0
+            }
+            for source, total, quality in sources
+        ]
+    
+    def _get_candidate_quality_metrics(
+        self, 
+        db: Session, 
+        job_id: UUID
+    ) -> Dict[str, Any]:
+        """Calculate candidate quality metrics"""
+        applications = db.query(Application).filter(
+            Application.job_id == job_id
+        ).all()
+        
+        if not applications:
+            return {
+                "average_match_score": 0,
+                "qualified_percentage": 0,
+                "overqualified_percentage": 0
+            }
+        
+        # This would ideally calculate actual match scores
+        # For now, use status as a proxy
+        qualified = sum(
+            1 for a in applications 
+            if a.status in ["interviewed", "offered", "hired"]
+        )
+        
+        return {
+            "total_applicants": len(applications),
+            "qualified_percentage": (qualified / len(applications) * 100),
+            "interview_conversion": (
+                sum(1 for a in applications if a.interview_date is not None) / 
+                len(applications) * 100
+            )
+        }
+    
+    def _estimate_time_to_fill(
+        self, 
+        db: Session, 
+        job: Job
+    ) -> Optional[int]:
+        """Estimate time to fill position based on historical data"""
+        # Get similar filled jobs
+        similar_jobs = db.query(Job).filter(
+            and_(
+                Job.company_id == job.company_id,
+                Job.title.ilike(f"%{job.title.split()[0]}%"),
+                Job.status == "filled"
+            )
+        ).limit(5).all()
+        
+        if not similar_jobs:
+            # Industry average
+            return 30
+        
+        # Calculate average time to fill
+        fill_times = []
+        for j in similar_jobs:
+            hired_app = db.query(Application).filter(
+                and_(
+                    Application.job_id == j.id,
+                    Application.status == "hired"
+                )
+            ).first()
+            
+            if hired_app:
+                days = (hired_app.last_updated - j.created_at).days
+                fill_times.append(days)
+        
+        return sum(fill_times) // len(fill_times) if fill_times else 30
+    
+    def _recommend_additional_skills(
+        self, 
+        db: Session, 
+        job: Job
+    ) -> List[str]:
+        """Recommend additional skills for job posting"""
+        # Get current job skills
+        current_skill_ids = [sr.skill_id for sr in job.skill_requirements]
+        
+        if not current_skill_ids:
+            return []
+        
+        # Find commonly paired skills
+        paired_skills = db.query(
+            Skill.name,
+            func.count(JobSkillRequirement.job_id).label('frequency')
+        ).join(
+            JobSkillRequirement,
+            JobSkillRequirement.skill_id == Skill.id
+        ).filter(
+            and_(
+                JobSkillRequirement.job_id.in_(
+                    db.query(JobSkillRequirement.job_id).filter(
+                        JobSkillRequirement.skill_id.in_(current_skill_ids)
+                    )
+                ),
+                ~Skill.id.in_(current_skill_ids)
+            )
+        ).group_by(
+            Skill.name
+        ).order_by(
+            func.count(JobSkillRequirement.job_id).desc()
+        ).limit(5).all()
+        
+        return [skill for skill, _ in paired_skills]
+    
+    def _get_salary_insights(
+        self, 
+        db: Session, 
+        job: Job
+    ) -> Dict[str, Any]:
+        """Get salary insights for job"""
+        # Find similar jobs
+        similar_jobs = db.query(Job).filter(
+            and_(
+                Job.id != job.id,
+                Job.title.ilike(f"%{job.title.split()[0]}%"),
+                Job.location.ilike(f"%{job.location.split(',')[0]}%"),
+                or_(Job.salary_min.isnot(None), Job.salary_max.isnot(None))
+            )
+        ).all()
+        
+        if not similar_jobs:
+            return {"message": "Insufficient data for salary insights"}
+        
+        min_salaries = [j.salary_min for j in similar_jobs if j.salary_min]
+        max_salaries = [j.salary_max for j in similar_jobs if j.salary_max]
+        
+        insights = {
+            "market_min": sum(min_salaries) / len(min_salaries) if min_salaries else 0,
+            "market_max": sum(max_salaries) / len(max_salaries) if max_salaries else 0,
+            "your_position": "competitive"
+        }
+        
+        if job.salary_min and insights["market_min"]:
+            if job.salary_min < insights["market_min"] * 0.9:
+                insights["your_position"] = "below_market"
+            elif job.salary_min > insights["market_min"] * 1.1:
+                insights["your_position"] = "above_market"
+        
+        return insights
 
 
 # Create service instance

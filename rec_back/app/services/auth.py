@@ -1,87 +1,33 @@
-from typing import Optional, Dict, Any
+# app/services/auth.py
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from uuid import UUID
-import logging
+from jose import jwt, JWTError
 from passlib.context import CryptContext
-from jose import JWTError, jwt
+from uuid import UUID
+import secrets
+import string
 
-from app.models.user import User, UserRole
-from app.models.candidate import CandidateProfile
-from app.models.company import EmployerProfile
-from app.models.consultant import ConsultantProfile
-from app.models.admin import AdminProfile, SuperAdminProfile
+from app.models.user import User
+from app.models.enums import UserRole
 from app.schemas.auth import (
-    RegisterRequest, LoginRequest, UserResponse, 
-    TokenResponse, LoginResponse
+    RegisterRequest, LoginRequest, TokenResponse, 
+    UserResponse, RefreshTokenRequest
 )
-from app.crud.base import CRUDBase
 from app.core.config import settings
-from app.core.security import get_password_hash, verify_password
-from app.services.base import BaseService
+from app.core.security import create_access_token, create_refresh_token
+from app.crud.base import CRUDBase
 
-logger = logging.getLogger(__name__)
 
-# Password context for hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 class AuthService:
-    """Service for handling authentication and authorization"""
+    """Service for authentication and authorization operations"""
     
     def __init__(self):
-        self.secret_key = settings.SECRET_KEY
-        self.algorithm = settings.ALGORITHM
-        self.access_token_expire_minutes = settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        self.refresh_token_expire_days = settings.REFRESH_TOKEN_EXPIRE_DAYS
-    
-    def register_user(
-        self, 
-        db: Session, 
-        *, 
-        register_data: RegisterRequest,
-        auto_verify: bool = False
-    ) -> Optional[User]:
-        """
-        Register a new user
-        
-        Args:
-            db: Database session
-            register_data: Registration data
-            auto_verify: Whether to auto-verify the user
-            
-        Returns:
-            Created user or None if email already exists
-        """
-        logger.info(f"Registering new user with email: {register_data.email}")
-        
-        # Check if user already exists
-        existing_user = db.query(User).filter(User.email == register_data.email).first()
-        if existing_user:
-            logger.warning(f"User with email {register_data.email} already exists")
-            return None
-        
-        # Create new user
-        user = User(
-            email=register_data.email,
-            password_hash=get_password_hash(register_data.password),
-            first_name=register_data.first_name,
-            last_name=register_data.last_name,
-            role=register_data.role,
-            is_active=True,
-            is_verified=auto_verify,
-            phone=register_data.phone
-        )
-        
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        
-        # Create role-specific profile
-        self._create_role_profile(db, user)
-        
-        logger.info(f"Successfully registered user with id: {user.id}")
-        return user
+        self.pwd_context = pwd_context
+        self.user_crud = CRUDBase(User)
     
     def authenticate_user(
         self, 
@@ -90,371 +36,279 @@ class AuthService:
         email: str, 
         password: str
     ) -> Optional[User]:
-        """
-        Authenticate a user by email and password
-        
-        Args:
-            db: Database session
-            email: User email
-            password: User password
-            
-        Returns:
-            Authenticated user or None if authentication fails
-        """
-        logger.debug(f"Authenticating user with email: {email}")
-        
+        """Authenticate user with email and password"""
         user = db.query(User).filter(User.email == email).first()
         if not user:
-            logger.warning(f"User with email {email} not found")
             return None
-        
-        if not verify_password(password, user.password_hash):
-            logger.warning(f"Invalid password for user {email}")
+        if not self.verify_password(password, user.password_hash):
             return None
-        
         if not user.is_active:
-            logger.warning(f"Inactive user {email} attempted to login")
             return None
+        return user
+    
+    def register_user(
+        self, 
+        db: Session, 
+        *, 
+        user_data: RegisterRequest
+    ) -> Tuple[User, TokenResponse]:
+        """Register a new user and return tokens"""
+        # Check if user exists
+        if self.get_user_by_email(db, email=user_data.email):
+            raise ValueError("Email already registered")
+        
+        # Create user
+        hashed_password = self.get_password_hash(user_data.password)
+        user = User(
+            email=user_data.email,
+            password_hash=hashed_password,
+            first_name=user_data.name.split()[0],
+            last_name=" ".join(user_data.name.split()[1:]) or "User",
+            role=user_data.role or UserRole.CANDIDATE,
+            is_active=True,
+            is_verified=False
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        
+        # Generate tokens
+        tokens = self.create_tokens(user)
+        
+        # Create profile based on role
+        self._create_role_profile(db, user)
+        
+        return user, tokens
+    
+    def login(
+        self, 
+        db: Session, 
+        *, 
+        login_data: LoginRequest
+    ) -> Tuple[User, TokenResponse]:
+        """Login user and return tokens"""
+        user = self.authenticate_user(
+            db, 
+            email=login_data.email, 
+            password=login_data.password
+        )
+        if not user:
+            raise ValueError("Incorrect email or password")
         
         # Update last login
         user.last_login = datetime.utcnow()
         db.commit()
         
-        logger.info(f"Successfully authenticated user {email}")
-        return user
+        # Generate tokens
+        tokens = self.create_tokens(user)
+        
+        # Log login for admin users
+        if user.role in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            self._log_admin_login(db, user)
+        
+        return user, tokens
     
-    def create_access_token(
-        self, 
-        subject: str, 
-        expires_delta: Optional[timedelta] = None
-    ) -> str:
-        """
-        Create a JWT access token
-        
-        Args:
-            subject: Token subject (usually user ID)
-            expires_delta: Optional expiration time
-            
-        Returns:
-            JWT token string
-        """
-        if expires_delta:
-            expire = datetime.utcnow() + expires_delta
-        else:
-            expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
-        
-        to_encode = {"exp": expire, "sub": str(subject), "type": "access"}
-        encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-        return encoded_jwt
-    
-    def create_refresh_token(
-        self, 
-        subject: str, 
-        expires_delta: Optional[timedelta] = None
-    ) -> str:
-        """
-        Create a JWT refresh token
-        
-        Args:
-            subject: Token subject (usually user ID)
-            expires_delta: Optional expiration time
-            
-        Returns:
-            JWT token string
-        """
-        if expires_delta:
-            expire = datetime.utcnow() + expires_delta
-        else:
-            expire = datetime.utcnow() + timedelta(days=self.refresh_token_expire_days)
-        
-        to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
-        encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-        return encoded_jwt
-    
-    def verify_token(self, token: str, token_type: str = "access") -> Optional[str]:
-        """
-        Verify a JWT token
-        
-        Args:
-            token: JWT token string
-            token_type: Type of token (access or refresh)
-            
-        Returns:
-            Token subject (user ID) if valid, None otherwise
-        """
-        try:
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
-            if payload.get("type") != token_type:
-                return None
-            return payload.get("sub")
-        except JWTError:
-            return None
-    
-    def login(self, db: Session, *, login_data: LoginRequest) -> Optional[LoginResponse]:
-        """
-        Login a user
-        
-        Args:
-            db: Database session
-            login_data: Login credentials
-            
-        Returns:
-            Login response with user and tokens
-        """
-        user = self.authenticate_user(db, email=login_data.email, password=login_data.password)
-        if not user:
-            return None
-        
-        # Create tokens
-        access_token = self.create_access_token(subject=user.id)
-        refresh_token = self.create_refresh_token(subject=user.id)
-        
-        # Create response
-        user_response = UserResponse.from_orm(user)
-        token_response = TokenResponse(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            token_type="bearer",
-            expires_in=self.access_token_expire_minutes * 60
-        )
-        
-        return LoginResponse(user=user_response, tokens=token_response)
-    
-    def refresh_access_token(
+    def refresh_token(
         self, 
         db: Session, 
         *, 
-        refresh_token: str
-    ) -> Optional[TokenResponse]:
-        """
-        Refresh an access token using a refresh token
-        
-        Args:
-            db: Database session
-            refresh_token: Refresh token
+        refresh_data: RefreshTokenRequest
+    ) -> TokenResponse:
+        """Refresh access token using refresh token"""
+        try:
+            payload = jwt.decode(
+                refresh_data.refresh_token,
+                settings.SECRET_KEY,
+                algorithms=[settings.ALGORITHM]
+            )
+            user_id = payload.get("sub")
+            if not user_id:
+                raise ValueError("Invalid refresh token")
             
-        Returns:
-            New token response or None if refresh token is invalid
-        """
-        user_id = self.verify_token(refresh_token, token_type="refresh")
-        if not user_id:
-            return None
-        
-        # Verify user still exists and is active
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user or not user.is_active:
-            return None
-        
-        # Create new access token
-        access_token = self.create_access_token(subject=user_id)
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user or not user.is_active:
+                raise ValueError("User not found or inactive")
+            
+            # Create new tokens
+            return self.create_tokens(user)
+            
+        except JWTError:
+            raise ValueError("Invalid refresh token")
+    
+    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
+        """Verify password against hash"""
+        return self.pwd_context.verify(plain_password, hashed_password)
+    
+    def get_password_hash(self, password: str) -> str:
+        """Hash password"""
+        return self.pwd_context.hash(password)
+    
+    def create_tokens(self, user: User) -> TokenResponse:
+        """Create access and refresh tokens for user"""
+        access_token = create_access_token(
+            data={"sub": str(user.id), "role": user.role}
+        )
+        refresh_token = create_refresh_token(
+            data={"sub": str(user.id)}
+        )
         
         return TokenResponse(
             access_token=access_token,
-            refresh_token=refresh_token,  # Return same refresh token
+            refresh_token=refresh_token,
             token_type="bearer",
-            expires_in=self.access_token_expire_minutes * 60
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )
     
-    def get_current_user(self, db: Session, *, token: str) -> Optional[User]:
-        """
-        Get current user from access token
-        
-        Args:
-            db: Database session
-            token: Access token
-            
-        Returns:
-            Current user or None if token is invalid
-        """
-        user_id = self.verify_token(token, token_type="access")
-        if not user_id:
-            return None
-        
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user or not user.is_active:
-            return None
-        
-        return user
-    
-    def change_password(
+    def get_user_by_email(
         self, 
         db: Session, 
         *, 
-        user_id: UUID, 
-        current_password: str, 
-        new_password: str
-    ) -> bool:
-        """
-        Change user password
-        
-        Args:
-            db: Database session
-            user_id: User ID
-            current_password: Current password
-            new_password: New password
+        email: str
+    ) -> Optional[User]:
+        """Get user by email"""
+        return db.query(User).filter(User.email == email).first()
+    
+    def verify_email_token(
+        self, 
+        db: Session, 
+        *, 
+        token: str
+    ) -> Optional[User]:
+        """Verify email verification token"""
+        try:
+            payload = jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=[settings.ALGORITHM]
+            )
+            user_id = payload.get("sub")
+            action = payload.get("action")
             
-        Returns:
-            True if password changed successfully, False otherwise
-        """
-        user = db.query(User).filter(User.id == user_id).first()
+            if not user_id or action != "email_verification":
+                return None
+            
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.is_verified = True
+                db.commit()
+                return user
+            
+        except JWTError:
+            pass
+        
+        return None
+    
+    def create_password_reset_token(
+        self, 
+        db: Session, 
+        *, 
+        email: str
+    ) -> Optional[str]:
+        """Create password reset token"""
+        user = self.get_user_by_email(db, email=email)
         if not user:
-            return False
+            return None
         
-        if not verify_password(current_password, user.password_hash):
-            logger.warning(f"Invalid current password for user {user_id}")
-            return False
+        token_data = {
+            "sub": str(user.id),
+            "action": "password_reset",
+            "exp": datetime.utcnow() + timedelta(hours=1)
+        }
         
-        user.password_hash = get_password_hash(new_password)
-        db.commit()
-        
-        logger.info(f"Password changed for user {user_id}")
-        return True
+        return jwt.encode(
+            token_data,
+            settings.SECRET_KEY,
+            algorithm=settings.ALGORITHM
+        )
     
     def reset_password(
         self, 
         db: Session, 
         *, 
-        email: str, 
-        new_password: str, 
-        reset_token: str
+        token: str, 
+        new_password: str
+    ) -> Optional[User]:
+        """Reset password using token"""
+        try:
+            payload = jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=[settings.ALGORITHM]
+            )
+            user_id = payload.get("sub")
+            action = payload.get("action")
+            
+            if not user_id or action != "password_reset":
+                return None
+            
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.password_hash = self.get_password_hash(new_password)
+                db.commit()
+                return user
+            
+        except JWTError:
+            pass
+        
+        return None
+    
+    def generate_temp_password(self, length: int = 12) -> str:
+        """Generate temporary password"""
+        alphabet = string.ascii_letters + string.digits + string.punctuation
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
+    
+    def change_password(
+        self, 
+        db: Session, 
+        *, 
+        user_id: UUID,
+        current_password: str,
+        new_password: str
     ) -> bool:
-        """
-        Reset user password with reset token
-        
-        Args:
-            db: Database session
-            email: User email
-            new_password: New password
-            reset_token: Password reset token
-            
-        Returns:
-            True if password reset successfully, False otherwise
-        """
-        # Verify reset token
-        token_email = self.verify_token(reset_token, token_type="reset")
-        if not token_email or token_email != email:
-            return False
-        
-        user = db.query(User).filter(User.email == email).first()
-        if not user:
-            return False
-        
-        user.password_hash = get_password_hash(new_password)
-        db.commit()
-        
-        logger.info(f"Password reset for user {email}")
-        return True
-    
-    def create_password_reset_token(self, email: str) -> str:
-        """
-        Create a password reset token
-        
-        Args:
-            email: User email
-            
-        Returns:
-            Password reset token
-        """
-        expire = datetime.utcnow() + timedelta(hours=24)
-        to_encode = {"exp": expire, "sub": email, "type": "reset"}
-        encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-        return encoded_jwt
-    
-    def verify_email(self, db: Session, *, user_id: UUID, verification_token: str) -> bool:
-        """
-        Verify user email
-        
-        Args:
-            db: Database session
-            user_id: User ID
-            verification_token: Email verification token
-            
-        Returns:
-            True if email verified successfully, False otherwise
-        """
-        token_user_id = self.verify_token(verification_token, token_type="verification")
-        if not token_user_id or token_user_id != str(user_id):
-            return False
-        
+        """Change user password"""
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             return False
         
-        user.is_verified = True
-        db.commit()
+        if not self.verify_password(current_password, user.password_hash):
+            return False
         
-        logger.info(f"Email verified for user {user_id}")
+        user.password_hash = self.get_password_hash(new_password)
+        db.commit()
         return True
     
-    def create_email_verification_token(self, user_id: UUID) -> str:
-        """
-        Create an email verification token
-        
-        Args:
-            user_id: User ID
-            
-        Returns:
-            Email verification token
-        """
-        expire = datetime.utcnow() + timedelta(days=7)
-        to_encode = {"exp": expire, "sub": str(user_id), "type": "verification"}
-        encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-        return encoded_jwt
-    
     def _create_role_profile(self, db: Session, user: User):
-        """
-        Create role-specific profile for user
-        
-        Args:
-            db: Database session
-            user: User instance
-        """
+        """Create role-specific profile after registration"""
         if user.role == UserRole.CANDIDATE:
+            from app.models.candidate import CandidateProfile
             profile = CandidateProfile(user_id=user.id)
             db.add(profile)
         elif user.role == UserRole.EMPLOYER:
-            # Employer profile needs company association, so skip for now
+            # Employer needs to be associated with a company
             pass
         elif user.role == UserRole.CONSULTANT:
-            profile = ConsultantProfile(user_id=user.id)
-            db.add(profile)
-        elif user.role == UserRole.ADMIN:
-            profile = AdminProfile(user_id=user.id)
-            db.add(profile)
-        elif user.role == UserRole.SUPERADMIN:
-            profile = SuperAdminProfile(user_id=user.id)
+            from app.models.consultant import ConsultantProfile
+            profile = ConsultantProfile(
+                user_id=user.id,
+                status="inactive"  # Needs admin approval
+            )
             db.add(profile)
         
         db.commit()
     
-    def check_permissions(
-        self, 
-        user: User, 
-        required_roles: Optional[List[UserRole]] = None,
-        required_permissions: Optional[List[str]] = None
-    ) -> bool:
-        """
-        Check if user has required roles or permissions
-        
-        Args:
-            user: User instance
-            required_roles: List of required roles
-            required_permissions: List of required permissions
-            
-        Returns:
-            True if user has required roles/permissions, False otherwise
-        """
-        # Check roles
-        if required_roles and user.role not in required_roles:
-            return False
-        
-        # Check permissions (for admin users)
-        if required_permissions and user.role in [UserRole.ADMIN, UserRole.SUPERADMIN]:
-            # This would need to check against admin profile permissions
-            # Simplified for now
-            pass
-        
-        return True
+    def _log_admin_login(self, db: Session, user: User):
+        """Log admin login for audit"""
+        from app.models.admin import AdminAuditLog
+        if user.role == UserRole.ADMIN and hasattr(user, 'admin_profile'):
+            log = AdminAuditLog(
+                admin_id=user.admin_profile.id,
+                action_type="login",
+                status="success",
+                ip_address="",  # Should be passed from request
+                user_agent=""   # Should be passed from request
+            )
+            db.add(log)
+            db.commit()
 
 
 # Create service instance

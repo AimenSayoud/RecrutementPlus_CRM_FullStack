@@ -1,493 +1,492 @@
+# app/services/company.py
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import func, and_, or_
 from uuid import UUID
-import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from app.models.company import Company, EmployerProfile
-from app.models.user import User, UserRole
+from app.models.company import (
+    Company, EmployerProfile, CompanyContact,
+    CompanyHiringPreferences, RecruitmentHistory
+)
+from app.models.job import Job
+from app.models.application import Application
+from app.models.user import User
 from app.schemas.employer import (
-    CompanyCreate, CompanyUpdate, CompanySearchFilters,
-    EmployerProfileCreate, EmployerProfileUpdate,
-    CompanyContactCreate, CompanyHiringPreferencesUpdate
+    CompanyCreate, CompanyUpdate, EmployerProfileCreate,
+    CompanySearchFilters, CompanyContactCreate
 )
-from app.crud import (
-    company as company_crud,
-    employer_profile as employer_crud,
-    company_contact as contact_crud,
-    company_hiring_preferences as preferences_crud,
-    recruitment_history as history_crud
-)
+from app.crud import employer as employer_crud
 from app.services.base import BaseService
 
-logger = logging.getLogger(__name__)
 
-
-class CompanyService(BaseService[Company, type(company_crud)]):
-    """Service for handling company operations"""
+class CompanyService(BaseService[Company, employer_crud.CRUDCompany]):
+    """Service for company and employer operations"""
     
     def __init__(self):
-        super().__init__(company_crud)
-        self.employer_crud = employer_crud
-        self.contact_crud = contact_crud
-        self.preferences_crud = preferences_crud
-        self.history_crud = history_crud
+        super().__init__(employer_crud.company)
+        self.employer_crud = employer_crud.employer_profile
+        self.contact_crud = employer_crud.company_contact
+        self.preferences_crud = employer_crud.company_hiring_preferences
+        self.history_crud = employer_crud.recruitment_history
     
-    def create_company(
-        self,
-        db: Session,
-        *,
+    def create_company_with_admin(
+        self, 
+        db: Session, 
+        *, 
         company_data: CompanyCreate,
-        created_by_user_id: UUID
-    ) -> Optional[Company]:
-        """
-        Create a new company
-        
-        Args:
-            db: Database session
-            company_data: Company data
-            created_by_user_id: User creating the company
-            
-        Returns:
-            Created company
-        """
-        logger.info(f"Creating company {company_data.name}")
-        
-        # Check if company name already exists
-        existing = self.crud.get_by_name(db, name=company_data.name)
-        if existing:
-            logger.warning(f"Company with name {company_data.name} already exists")
-            return None
-        
+        admin_user_id: UUID
+    ) -> Company:
+        """Create company and assign first admin"""
         # Create company
         company = self.crud.create(db, obj_in=company_data)
         
-        # Create employer profile for the creating user
-        employer_data = EmployerProfileCreate(
-            user_id=created_by_user_id,
+        # Create employer profile for admin
+        employer_profile = EmployerProfileCreate(
+            user_id=admin_user_id,
             company_id=company.id,
-            is_primary_contact=True,
+            position="Company Administrator",
             can_post_jobs=True
         )
-        self.employer_crud.create(db, obj_in=employer_data)
+        self.employer_crud.create(db, obj_in=employer_profile)
         
-        logger.info(f"Successfully created company {company.id}")
+        # Create primary contact
+        user = db.query(User).filter(User.id == admin_user_id).first()
+        if user:
+            contact = CompanyContactCreate(
+                company_id=company.id,
+                name=user.full_name,
+                email=user.email,
+                phone=user.phone,
+                title="Primary Contact",
+                is_primary=True
+            )
+            self.contact_crud.create(db, obj_in=contact)
+        
+        # Log company creation
+        self.log_action(
+            "company_created",
+            user_id=admin_user_id,
+            details={"company_id": str(company.id), "company_name": company.name}
+        )
+        
         return company
     
-    def update_company(
-        self,
-        db: Session,
-        *,
+    def verify_company(
+        self, 
+        db: Session, 
+        *, 
         company_id: UUID,
-        company_data: CompanyUpdate,
-        updated_by_user_id: UUID
-    ) -> Optional[Company]:
-        """
-        Update company information
+        verified_by: UUID,
+        verification_notes: Optional[str] = None
+    ) -> bool:
+        """Verify a company profile"""
+        company = self.get(db, id=company_id)
+        if not company:
+            return False
         
-        Args:
-            db: Database session
-            company_id: Company ID
-            company_data: Update data
-            updated_by_user_id: User updating the company
-            
-        Returns:
-            Updated company
-        """
-        logger.info(f"Updating company {company_id}")
+        company.is_verified = True
         
-        # Verify user has permission
-        if not self._verify_company_permission(db, user_id=updated_by_user_id, company_id=company_id):
-            logger.error(f"User {updated_by_user_id} does not have permission to update company {company_id}")
-            return None
-        
-        return self.crud.update(db, id=company_id, obj_in=company_data)
-    
-    def add_employer(
-        self,
-        db: Session,
-        *,
-        company_id: UUID,
-        user_id: UUID,
-        employer_data: EmployerProfileCreate,
-        added_by_user_id: UUID
-    ) -> Optional[EmployerProfile]:
-        """
-        Add an employer to a company
-        
-        Args:
-            db: Database session
-            company_id: Company ID
-            user_id: User to add as employer
-            employer_data: Employer profile data
-            added_by_user_id: User adding the employer
-            
-        Returns:
-            Created employer profile
-        """
-        logger.info(f"Adding employer {user_id} to company {company_id}")
-        
-        # Verify permission
-        if not self._verify_company_permission(db, user_id=added_by_user_id, company_id=company_id):
-            logger.error(f"User {added_by_user_id} does not have permission to add employers to company {company_id}")
-            return None
-        
-        # Verify user exists and has employer role
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user or user.role != UserRole.EMPLOYER:
-            logger.error(f"Invalid user {user_id} for employer profile")
-            return None
-        
-        # Check if already an employer for this company
-        existing = db.query(EmployerProfile).filter(
-            EmployerProfile.user_id == user_id,
-            EmployerProfile.company_id == company_id
-        ).first()
-        
-        if existing:
-            logger.warning(f"User {user_id} is already an employer for company {company_id}")
-            return existing
-        
-        # Create employer profile
-        employer_data.user_id = user_id
-        employer_data.company_id = company_id
-        
-        profile = self.employer_crud.create(db, obj_in=employer_data)
-        
-        # Update company employee count
-        self.crud.update_job_counts(db, company_id=company_id)
-        
-        return profile
-    
-    def update_employer_permissions(
-        self,
-        db: Session,
-        *,
-        employer_id: UUID,
-        can_post_jobs: bool,
-        updated_by_user_id: UUID
-    ) -> Optional[EmployerProfile]:
-        """
-        Update employer permissions
-        
-        Args:
-            db: Database session
-            employer_id: Employer profile ID
-            can_post_jobs: Whether employer can post jobs
-            updated_by_user_id: User updating permissions
-            
-        Returns:
-            Updated employer profile
-        """
-        logger.info(f"Updating permissions for employer {employer_id}")
-        
-        employer = self.employer_crud.get(db, id=employer_id)
-        if not employer:
-            return None
-        
-        # Verify permission
-        if not self._verify_company_permission(db, user_id=updated_by_user_id, company_id=employer.company_id):
-            logger.error(f"User {updated_by_user_id} does not have permission to update employer permissions")
-            return None
-        
-        return self.employer_crud.update(
-            db,
-            id=employer_id,
-            obj_in={"can_post_jobs": can_post_jobs}
+        # Log verification
+        self.log_action(
+            "company_verified",
+            user_id=verified_by,
+            details={
+                "company_id": str(company_id),
+                "notes": verification_notes
+            }
         )
+        
+        db.commit()
+        return True
     
-    def add_contact(
-        self,
-        db: Session,
-        *,
+    def upgrade_to_premium(
+        self, 
+        db: Session, 
+        *, 
         company_id: UUID,
-        contact_data: CompanyContactCreate,
-        added_by_user_id: UUID
-    ):
-        """
-        Add contact to company
+        duration_months: int = 12
+    ) -> bool:
+        """Upgrade company to premium status"""
+        company = self.get(db, id=company_id)
+        if not company:
+            return False
         
-        Args:
-            db: Database session
-            company_id: Company ID
-            contact_data: Contact data
-            added_by_user_id: User adding the contact
-            
-        Returns:
-            Created contact
-        """
-        logger.info(f"Adding contact to company {company_id}")
+        company.is_premium = True
         
-        # Verify permission
-        if not self._verify_company_permission(db, user_id=added_by_user_id, company_id=company_id):
-            logger.error(f"User {added_by_user_id} does not have permission to add contacts to company {company_id}")
-            return None
+        # You might want to track premium expiration
+        # This would require additional fields in the model
         
-        contact_data.company_id = company_id
-        
-        # If setting as primary, unset other primary contacts
-        if contact_data.is_primary:
-            contact = self.contact_crud.create(db, obj_in=contact_data)
-            if contact:
-                self.contact_crud.set_primary_contact(db, contact_id=contact.id)
-            return contact
-        
-        return self.contact_crud.create(db, obj_in=contact_data)
+        db.commit()
+        return True
     
-    def update_hiring_preferences(
-        self,
-        db: Session,
-        *,
-        company_id: UUID,
-        preferences_data: CompanyHiringPreferencesUpdate,
-        updated_by_user_id: UUID
-    ):
-        """
-        Update company hiring preferences
-        
-        Args:
-            db: Database session
-            company_id: Company ID
-            preferences_data: Preferences data
-            updated_by_user_id: User updating preferences
-            
-        Returns:
-            Updated preferences
-        """
-        logger.info(f"Updating hiring preferences for company {company_id}")
-        
-        # Verify permission
-        if not self._verify_company_permission(db, user_id=updated_by_user_id, company_id=company_id):
-            logger.error(f"User {updated_by_user_id} does not have permission to update company preferences")
-            return None
-        
-        return self.preferences_crud.create_or_update(
-            db,
-            company_id=company_id,
-            obj_in=preferences_data
-        )
-    
-    def search_companies(
-        self,
-        db: Session,
-        *,
-        filters: CompanySearchFilters
-    ) -> tuple[List[Company], int]:
-        """
-        Search companies with filters
-        
-        Args:
-            db: Database session
-            filters: Search filters
-            
-        Returns:
-            Tuple of (companies, total_count)
-        """
-        logger.info(f"Searching companies with filters: {filters}")
-        return self.crud.get_multi_with_search(db, filters=filters)
-    
-    def get_company_statistics(
-        self,
-        db: Session,
-        *,
+    def get_company_dashboard_stats(
+        self, 
+        db: Session, 
+        *, 
         company_id: UUID
     ) -> Dict[str, Any]:
-        """
-        Get company statistics
-        
-        Args:
-            db: Database session
-            company_id: Company ID
-            
-        Returns:
-            Statistics dictionary
-        """
-        logger.debug(f"Getting statistics for company {company_id}")
-        
+        """Get comprehensive company dashboard statistics"""
         stats = self.crud.get_company_stats(db, company_id=company_id)
         
-        # Add additional statistics
-        avg_time_to_fill = self.history_crud.get_average_time_to_fill(db, company_id=company_id)
-        stats["average_time_to_fill"] = avg_time_to_fill
-        
-        # Get recent hiring trends
-        recent_hires = self.history_crud.get_by_company(db, company_id=company_id, limit=10)
-        stats["recent_hires"] = len(recent_hires)
+        # Add more detailed stats
+        stats.update({
+            "active_applications": self._get_active_applications_count(db, company_id),
+            "interviews_scheduled": self._get_scheduled_interviews_count(db, company_id),
+            "offers_pending": self._get_pending_offers_count(db, company_id),
+            "avg_time_to_hire": self.history_crud.get_average_time_to_fill(
+                db, company_id=company_id
+            ),
+            "hiring_funnel": self._get_hiring_funnel_stats(db, company_id),
+            "top_sources": self._get_top_application_sources(db, company_id),
+            "monthly_trends": self._get_monthly_hiring_trends(db, company_id)
+        })
         
         return stats
     
-    def verify_company(
-        self,
-        db: Session,
-        *,
+    def get_talent_pipeline(
+        self, 
+        db: Session, 
+        *, 
         company_id: UUID,
-        verified_by_user_id: UUID
-    ) -> Optional[Company]:
-        """
-        Verify a company (admin action)
+        job_id: Optional[UUID] = None
+    ) -> Dict[str, Any]:
+        """Get talent pipeline analytics"""
+        query = db.query(Application).join(
+            Job, Application.job_id == Job.id
+        ).filter(Job.company_id == company_id)
         
-        Args:
-            db: Database session
-            company_id: Company ID
-            verified_by_user_id: Admin user verifying
-            
-        Returns:
-            Verified company
-        """
-        logger.info(f"Verifying company {company_id}")
+        if job_id:
+            query = query.filter(Application.job_id == job_id)
         
-        # Check if user is admin
-        user = db.query(User).filter(User.id == verified_by_user_id).first()
-        if not user or user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
-            logger.error(f"User {verified_by_user_id} is not authorized to verify companies")
+        applications = query.all()
+        
+        # Group by status
+        pipeline = {
+            "total": len(applications),
+            "stages": {},
+            "conversion_rates": {},
+            "avg_days_in_stage": {}
+        }
+        
+        status_groups = {}
+        for app in applications:
+            status = app.status
+            if status not in status_groups:
+                status_groups[status] = []
+            status_groups[status].append(app)
+        
+        # Calculate metrics for each stage
+        stages = [
+            "submitted", "under_review", "interviewed", 
+            "offered", "hired", "rejected"
+        ]
+        
+        for i, stage in enumerate(stages):
+            if stage in status_groups:
+                pipeline["stages"][stage] = len(status_groups[stage])
+                
+                # Calculate conversion rate to next stage
+                if i < len(stages) - 2:  # Exclude rejected
+                    next_stages = stages[i+1:-1]  # Exclude rejected
+                    converted = sum(
+                        len(status_groups.get(s, [])) 
+                        for s in next_stages
+                    )
+                    total_at_stage = len(status_groups[stage])
+                    pipeline["conversion_rates"][f"{stage}_to_next"] = (
+                        (converted / total_at_stage * 100) 
+                        if total_at_stage > 0 else 0
+                    )
+        
+        return pipeline
+    
+    def add_team_member(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        user_email: str,
+        position: str,
+        can_post_jobs: bool = False,
+        added_by: UUID
+    ) -> Optional[EmployerProfile]:
+        """Add a team member to company"""
+        # Find user by email
+        user = db.query(User).filter(User.email == user_email).first()
+        if not user:
             return None
         
-        company = self.crud.update(db, id=company_id, obj_in={"is_verified": True})
-        
-        if company:
-            self.log_action(
-                "company_verified",
-                user_id=verified_by_user_id,
-                details={"company_id": str(company_id), "company_name": company.name}
-            )
-        
-        return company
-    
-    def upgrade_to_premium(
-        self,
-        db: Session,
-        *,
-        company_id: UUID,
-        upgraded_by_user_id: UUID
-    ) -> Optional[Company]:
-        """
-        Upgrade company to premium
-        
-        Args:
-            db: Database session
-            company_id: Company ID
-            upgraded_by_user_id: User upgrading
-            
-        Returns:
-            Premium company
-        """
-        logger.info(f"Upgrading company {company_id} to premium")
-        
-        # Verify permission (company admin or system admin)
-        if not self._verify_company_permission(db, user_id=upgraded_by_user_id, company_id=company_id, admin_allowed=True):
-            logger.error(f"User {upgraded_by_user_id} is not authorized to upgrade company to premium")
+        # Check if already a member
+        existing = self.employer_crud.get_by_user_id(db, user_id=user.id)
+        if any(ep.company_id == company_id for ep in existing):
             return None
         
-        company = self.crud.update(db, id=company_id, obj_in={"is_premium": True})
+        # Create employer profile
+        profile = EmployerProfileCreate(
+            user_id=user.id,
+            company_id=company_id,
+            position=position,
+            can_post_jobs=can_post_jobs
+        )
         
-        if company:
-            self.log_action(
-                "company_premium_upgrade",
-                user_id=upgraded_by_user_id,
-                details={"company_id": str(company_id), "company_name": company.name}
-            )
+        employer_profile = self.employer_crud.create(db, obj_in=profile)
         
-        return company
+        # Log addition
+        self.log_action(
+            "team_member_added",
+            user_id=added_by,
+            details={
+                "company_id": str(company_id),
+                "new_member_id": str(user.id),
+                "position": position
+            }
+        )
+        
+        return employer_profile
     
-    def _verify_company_permission(
-        self,
-        db: Session,
-        *,
-        user_id: UUID,
-        company_id: UUID,
-        admin_allowed: bool = True
-    ) -> bool:
-        """
-        Verify if user has permission for company operations
-        
-        Args:
-            db: Database session
-            user_id: User ID
-            company_id: Company ID
-            admin_allowed: Whether admin users are allowed
-            
-        Returns:
-            True if user has permission
-        """
-        # Check if user is employer for this company
-        employer = db.query(EmployerProfile).filter(
-            EmployerProfile.user_id == user_id,
-            EmployerProfile.company_id == company_id
-        ).first()
-        
-        if employer:
-            return True
-        
-        # Check if user is admin
-        if admin_allowed:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user and user.role in [UserRole.ADMIN, UserRole.SUPERADMIN]:
-                return True
-        
-        return False
-    
-    def get_company_employers(
-        self,
-        db: Session,
-        *,
+    def get_competitor_analysis(
+        self, 
+        db: Session, 
+        *, 
         company_id: UUID
-    ) -> List[EmployerProfile]:
-        """
-        Get all employers for a company
+    ) -> Dict[str, Any]:
+        """Get competitor analysis based on industry and location"""
+        company = self.get(db, id=company_id)
+        if not company:
+            return {}
         
-        Args:
-            db: Database session
-            company_id: Company ID
-            
-        Returns:
-            List of employer profiles
-        """
-        return self.employer_crud.get_by_company(db, company_id=company_id)
+        # Find similar companies
+        competitors = db.query(Company).filter(
+            and_(
+                Company.id != company_id,
+                Company.industry == company.industry,
+                or_(
+                    Company.city == company.city,
+                    Company.country == company.country
+                )
+            )
+        ).all()
+        
+        analysis = {
+            "company": {
+                "name": company.name,
+                "active_jobs": company.active_jobs,
+                "total_employees": company.total_employees
+            },
+            "competitors": [],
+            "market_position": {},
+            "insights": []
+        }
+        
+        # Analyze competitors
+        for competitor in competitors:
+            comp_stats = self.crud.get_company_stats(db, company_id=competitor.id)
+            analysis["competitors"].append({
+                "name": competitor.name,
+                "is_verified": competitor.is_verified,
+                "active_jobs": competitor.active_jobs,
+                "total_employees": competitor.total_employees,
+                "total_hires": comp_stats.get("total_hires", 0)
+            })
+        
+        # Calculate market position
+        if competitors:
+            job_ranks = sorted(
+                [c.active_jobs for c in competitors] + [company.active_jobs],
+                reverse=True
+            )
+            analysis["market_position"]["job_posting_rank"] = (
+                job_ranks.index(company.active_jobs) + 1
+            )
+            analysis["market_position"]["total_companies"] = len(job_ranks)
+        
+        # Generate insights
+        if company.active_jobs < sum(c.active_jobs for c in competitors) / len(competitors):
+            analysis["insights"].append(
+                "Your company has fewer active jobs than the industry average"
+            )
+        
+        return analysis
     
-    def remove_employer(
-        self,
-        db: Session,
-        *,
-        employer_id: UUID,
-        removed_by_user_id: UUID
-    ) -> bool:
-        """
-        Remove employer from company
+    def get_recruitment_efficiency_metrics(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """Calculate recruitment efficiency metrics"""
+        if not date_from:
+            date_from = datetime.utcnow() - timedelta(days=90)
+        if not date_to:
+            date_to = datetime.utcnow()
         
-        Args:
-            db: Database session
-            employer_id: Employer profile ID
-            removed_by_user_id: User removing the employer
-            
-        Returns:
-            True if removed successfully
-        """
-        logger.info(f"Removing employer {employer_id}")
+        # Get all applications in date range
+        applications = db.query(Application).join(
+            Job, Application.job_id == Job.id
+        ).filter(
+            and_(
+                Job.company_id == company_id,
+                Application.applied_at >= date_from,
+                Application.applied_at <= date_to
+            )
+        ).all()
         
-        employer = self.employer_crud.get(db, id=employer_id)
-        if not employer:
-            return False
+        metrics = {
+            "total_applications": len(applications),
+            "applications_per_hire": 0,
+            "interview_to_hire_ratio": 0,
+            "offer_acceptance_rate": 0,
+            "ghost_rate": 0,
+            "quality_of_hire_indicators": {}
+        }
         
-        # Verify permission
-        if not self._verify_company_permission(db, user_id=removed_by_user_id, company_id=employer.company_id):
-            logger.error(f"User {removed_by_user_id} does not have permission to remove employers")
-            return False
+        # Calculate metrics
+        hired = sum(1 for a in applications if a.status == "hired")
+        interviewed = sum(1 for a in applications if a.interview_date is not None)
+        offered = sum(1 for a in applications if a.status in ["offered", "hired"])
+        accepted = sum(1 for a in applications if a.status == "hired")
         
-        # Don't allow removing the last employer
-        employer_count = db.query(EmployerProfile).filter(
-            EmployerProfile.company_id == employer.company_id
-        ).count()
+        if hired > 0:
+            metrics["applications_per_hire"] = len(applications) / hired
+            if interviewed > 0:
+                metrics["interview_to_hire_ratio"] = interviewed / hired
         
-        if employer_count <= 1:
-            logger.error("Cannot remove the last employer from company")
-            return False
+        if offered > 0:
+            metrics["offer_acceptance_rate"] = (accepted / offered) * 100
         
-        self.employer_crud.remove(db, id=employer_id)
+        # Calculate ghost rate (candidates who stopped responding)
+        ghosted = sum(
+            1 for a in applications 
+            if a.status == "under_review" and 
+            (datetime.utcnow() - a.last_updated).days > 14
+        )
+        if len(applications) > 0:
+            metrics["ghost_rate"] = (ghosted / len(applications)) * 100
         
-        # Update company employee count
-        self.crud.update_job_counts(db, company_id=employer.company_id)
+        return metrics
+    
+    def _get_active_applications_count(
+        self, 
+        db: Session, 
+        company_id: UUID
+    ) -> int:
+        """Count active applications for company"""
+        return db.query(func.count(Application.id)).join(
+            Job, Application.job_id == Job.id
+        ).filter(
+            and_(
+                Job.company_id == company_id,
+                Application.status.in_(["submitted", "under_review", "interviewed"])
+            )
+        ).scalar() or 0
+    
+    def _get_scheduled_interviews_count(
+        self, 
+        db: Session, 
+        company_id: UUID
+    ) -> int:
+        """Count scheduled interviews for company"""
+        return db.query(func.count(Application.id)).join(
+            Job, Application.job_id == Job.id
+        ).filter(
+            and_(
+                Job.company_id == company_id,
+                Application.interview_date >= datetime.utcnow()
+            )
+        ).scalar() or 0
+    
+    def _get_pending_offers_count(
+        self, 
+        db: Session, 
+        company_id: UUID
+    ) -> int:
+        """Count pending offers for company"""
+        return db.query(func.count(Application.id)).join(
+            Job, Application.job_id == Job.id
+        ).filter(
+            and_(
+                Job.company_id == company_id,
+                Application.status == "offered",
+                Application.offer_response == "pending"
+            )
+        ).scalar() or 0
+    
+    def _get_hiring_funnel_stats(
+        self, 
+        db: Session, 
+        company_id: UUID
+    ) -> Dict[str, int]:
+        """Get hiring funnel statistics"""
+        stats = db.query(
+            Application.status,
+            func.count(Application.id)
+        ).join(
+            Job, Application.job_id == Job.id
+        ).filter(
+            Job.company_id == company_id
+        ).group_by(
+            Application.status
+        ).all()
         
-        return True
+        return {status: count for status, count in stats}
+    
+    def _get_top_application_sources(
+        self, 
+        db: Session, 
+        company_id: UUID,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Get top sources of applications"""
+        sources = db.query(
+            Application.source,
+            func.count(Application.id).label('count')
+        ).join(
+            Job, Application.job_id == Job.id
+        ).filter(
+            Job.company_id == company_id
+        ).group_by(
+            Application.source
+        ).order_by(
+            func.count(Application.id).desc()
+        ).limit(limit).all()
+        
+        return [
+            {"source": source or "direct", "count": count}
+            for source, count in sources
+        ]
+    
+    def _get_monthly_hiring_trends(
+        self, 
+        db: Session, 
+        company_id: UUID,
+        months: int = 6
+    ) -> Dict[str, List[int]]:
+        """Get monthly hiring trends"""
+        start_date = datetime.utcnow() - timedelta(days=30 * months)
+        
+        applications = db.query(
+            func.date_trunc('month', Application.applied_at).label('month'),
+            func.count(Application.id).label('count')
+        ).join(
+            Job, Application.job_id == Job.id
+        ).filter(
+            and_(
+                Job.company_id == company_id,
+                Application.applied_at >= start_date
+            )
+        ).group_by(
+            func.date_trunc('month', Application.applied_at)
+        ).order_by('month').all()
+        
+        trends = {}
+        for month, count in applications:
+            month_key = month.strftime("%Y-%m")
+            trends[month_key] = count
+        
+        return trends
 
 
 # Create service instance

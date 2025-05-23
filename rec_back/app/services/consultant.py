@@ -1,189 +1,202 @@
+# app/services/consultant.py
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, func
 from uuid import UUID
-import logging
-from datetime import datetime, date
+from datetime import datetime, timedelta, date
+from decimal import Decimal
 
-from app.models.consultant import ConsultantProfile, ConsultantStatus
-from app.models.user import User, UserRole
+from app.models.consultant import (
+    ConsultantProfile, ConsultantStatus, ConsultantTarget,
+    ConsultantPerformanceReview, ConsultantCandidate, ConsultantClient
+)
+from app.models.application import Application, ApplicationStatus
+from app.models.job import Job
 from app.schemas.consultant import (
     ConsultantProfileCreate, ConsultantProfileUpdate,
-    ConsultantSearchFilters, ConsultantTargetCreate,
-    ConsultantPerformanceReviewCreate
+    ConsultantTargetCreate, ConsultantPerformanceReviewCreate,
+    ConsultantSearchFilters
 )
-from app.crud import (
-    consultant_profile as consultant_crud,
-    consultant_target as target_crud,
-    consultant_performance_review as review_crud,
-    consultant_candidate as candidate_crud,
-    consultant_client as client_crud
-)
+from app.crud import consultant as consultant_crud
 from app.services.base import BaseService
 
-logger = logging.getLogger(__name__)
 
-
-class ConsultantService(BaseService[ConsultantProfile, type(consultant_crud)]):
-    """Service for handling consultant operations"""
+class ConsultantService(BaseService[ConsultantProfile, consultant_crud.CRUDConsultantProfile]):
+    """Service for consultant operations and performance management"""
     
     def __init__(self):
-        super().__init__(consultant_crud)
-        self.target_crud = target_crud
-        self.review_crud = review_crud
-        self.candidate_crud = candidate_crud
-        self.client_crud = client_crud
+        super().__init__(consultant_crud.consultant_profile)
+        self.target_crud = consultant_crud.consultant_target
+        self.review_crud = consultant_crud.consultant_performance_review
+        self.candidate_crud = consultant_crud.consultant_candidate
+        self.client_crud = consultant_crud.consultant_client
     
-    def create_consultant_profile(
-        self,
-        db: Session,
-        *,
+    def onboard_consultant(
+        self, 
+        db: Session, 
+        *, 
         user_id: UUID,
-        profile_data: ConsultantProfileCreate
+        profile_data: ConsultantProfileCreate,
+        onboarded_by: UUID
+    ) -> ConsultantProfile:
+        """Complete consultant onboarding process"""
+        # Create consultant profile
+        consultant = self.crud.create(db, obj_in=profile_data)
+        
+        # Set initial targets
+        self._create_initial_targets(db, consultant_id=consultant.id)
+        
+        # Assign to manager if specified
+        if profile_data.manager_id:
+            self._assign_to_manager(db, consultant.id, profile_data.manager_id)
+        
+        # Log onboarding
+        self.log_action(
+            "consultant_onboarded",
+            user_id=onboarded_by,
+            details={
+                "consultant_id": str(consultant.id),
+                "user_id": str(user_id)
+            }
+        )
+        
+        return consultant
+    
+    def update_consultant_status(
+        self, 
+        db: Session, 
+        *, 
+        consultant_id: UUID,
+        new_status: ConsultantStatus,
+        reason: Optional[str] = None,
+        updated_by: UUID
     ) -> Optional[ConsultantProfile]:
-        """
-        Create consultant profile
-        
-        Args:
-            db: Database session
-            user_id: User ID
-            profile_data: Profile data
-            
-        Returns:
-            Created consultant profile
-        """
-        logger.info(f"Creating consultant profile for user {user_id}")
-        
-        # Verify user exists and has consultant role
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user or user.role != UserRole.CONSULTANT:
-            logger.error(f"Invalid user {user_id} for consultant profile")
+        """Update consultant status with validation"""
+        consultant = self.get(db, id=consultant_id)
+        if not consultant:
             return None
         
-        # Check if profile already exists
-        existing = self.crud.get_by_user_id(db, user_id=user_id)
-        if existing:
-            logger.warning(f"Consultant profile already exists for user {user_id}")
-            return existing
+        old_status = consultant.status
+        consultant.status = new_status
         
-        # Create profile
-        profile_data.user_id = user_id
-        profile = self.crud.create(db, obj_in=profile_data)
+        # Handle status-specific actions
+        if new_status == ConsultantStatus.INACTIVE:
+            # Reassign active candidates and clients
+            self._handle_consultant_deactivation(db, consultant_id)
+        elif new_status == ConsultantStatus.ACTIVE and old_status != ConsultantStatus.ACTIVE:
+            # Reactivation
+            consultant.availability_status = "available"
         
-        logger.info(f"Successfully created consultant profile {profile.id}")
-        return profile
+        # Log status change
+        self.log_action(
+            "consultant_status_changed",
+            user_id=updated_by,
+            details={
+                "consultant_id": str(consultant_id),
+                "old_status": old_status,
+                "new_status": new_status,
+                "reason": reason
+            }
+        )
+        
+        db.commit()
+        return consultant
     
-    def update_consultant_profile(
-        self,
-        db: Session,
-        *,
-        consultant_id: UUID,
-        profile_data: ConsultantProfileUpdate
-    ) -> Optional[ConsultantProfile]:
-        """
-        Update consultant profile
+    def get_consultant_dashboard(
+        self, 
+        db: Session, 
+        *, 
+        consultant_id: UUID
+    ) -> Dict[str, Any]:
+        """Get comprehensive consultant dashboard data"""
+        consultant = self.crud.get_with_details(db, id=consultant_id)
+        if not consultant:
+            return {}
         
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
-            profile_data: Update data
-            
-        Returns:
-            Updated consultant profile
-        """
-        logger.info(f"Updating consultant profile {consultant_id}")
+        dashboard = {
+            "profile": {
+                "id": consultant.id,
+                "name": consultant.user.full_name,
+                "status": consultant.status,
+                "rating": consultant.average_rating,
+                "total_placements": consultant.total_placements
+            },
+            "current_metrics": self._get_current_period_metrics(db, consultant_id),
+            "active_assignments": {
+                "candidates": len([c for c in consultant.candidate_assignments if c.is_active]),
+                "clients": len([c for c in consultant.client_assignments if c.is_active]),
+                "applications": self._get_active_applications_count(db, consultant_id)
+            },
+            "targets": self._get_current_targets(db, consultant_id),
+            "recent_activity": self._get_recent_activity(db, consultant_id),
+            "upcoming_tasks": self._get_upcoming_tasks(db, consultant_id),
+            "performance_trend": self._get_performance_trend(db, consultant_id)
+        }
         
-        profile = self.crud.update(db, id=consultant_id, obj_in=profile_data)
-        
-        # Update performance metrics if needed
-        if profile:
-            self.crud.update_performance_metrics(db, consultant_id=consultant_id)
-        
-        return profile
+        return dashboard
     
-    def assign_candidate(
-        self,
-        db: Session,
-        *,
+    def assign_candidate_to_consultant(
+        self, 
+        db: Session, 
+        *, 
         consultant_id: UUID,
         candidate_id: UUID,
-        assigned_by_user_id: UUID,
-        notes: Optional[str] = None
-    ):
-        """
-        Assign candidate to consultant
-        
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
-            candidate_id: Candidate ID
-            assigned_by_user_id: User making the assignment
-            notes: Optional notes
-            
-        Returns:
-            Assignment record
-        """
-        logger.info(f"Assigning candidate {candidate_id} to consultant {consultant_id}")
-        
-        # Verify consultant exists and is active
-        consultant = self.crud.get(db, id=consultant_id)
+        assignment_reason: Optional[str] = None,
+        assigned_by: UUID
+    ) -> ConsultantCandidate:
+        """Assign candidate to consultant with workload check"""
+        consultant = self.get(db, id=consultant_id)
         if not consultant or consultant.status != ConsultantStatus.ACTIVE:
-            logger.error(f"Consultant {consultant_id} is not active")
-            return None
+            raise ValueError("Consultant is not active")
+        
+        # Check workload
+        active_assignments = self.candidate_crud.get_consultant_candidates(
+            db, consultant_id=consultant_id
+        )
+        active_count = sum(1 for a in active_assignments if a.is_active)
+        
+        if active_count >= (consultant.max_concurrent_assignments or 10):
+            raise ValueError("Consultant has reached maximum assignment capacity")
         
         # Create assignment
         assignment = self.candidate_crud.assign_candidate(
             db,
             consultant_id=consultant_id,
             candidate_id=candidate_id,
-            notes=notes
+            notes=assignment_reason
         )
         
         # Update consultant metrics
-        self.crud.update_performance_metrics(db, consultant_id=consultant_id)
+        consultant.current_active_jobs += 1
         
-        # Log action
+        # Log assignment
         self.log_action(
-            "candidate_assigned",
-            user_id=assigned_by_user_id,
+            "candidate_assigned_to_consultant",
+            user_id=assigned_by,
             details={
                 "consultant_id": str(consultant_id),
-                "candidate_id": str(candidate_id)
+                "candidate_id": str(candidate_id),
+                "reason": assignment_reason
             }
         )
         
+        db.commit()
         return assignment
     
-    def assign_client(
-        self,
-        db: Session,
-        *,
+    def assign_client_to_consultant(
+        self, 
+        db: Session, 
+        *, 
         consultant_id: UUID,
         company_id: UUID,
-        assigned_by_user_id: UUID,
         is_primary: bool = False,
-        notes: Optional[str] = None
-    ):
-        """
-        Assign client company to consultant
-        
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
-            company_id: Company ID
-            assigned_by_user_id: User making the assignment
-            is_primary: Whether consultant is primary for this client
-            notes: Optional notes
-            
-        Returns:
-            Assignment record
-        """
-        logger.info(f"Assigning client {company_id} to consultant {consultant_id}")
-        
-        # Verify consultant exists and is active
-        consultant = self.crud.get(db, id=consultant_id)
+        assignment_notes: Optional[str] = None,
+        assigned_by: UUID
+    ) -> ConsultantClient:
+        """Assign client company to consultant"""
+        consultant = self.get(db, id=consultant_id)
         if not consultant or consultant.status != ConsultantStatus.ACTIVE:
-            logger.error(f"Consultant {consultant_id} is not active")
-            return None
+            raise ValueError("Consultant is not active")
         
         # Create assignment
         assignment = self.client_crud.assign_client(
@@ -191,16 +204,13 @@ class ConsultantService(BaseService[ConsultantProfile, type(consultant_crud)]):
             consultant_id=consultant_id,
             company_id=company_id,
             is_primary=is_primary,
-            notes=notes
+            notes=assignment_notes
         )
         
-        # Update consultant metrics
-        self.crud.update_performance_metrics(db, consultant_id=consultant_id)
-        
-        # Log action
+        # Log assignment
         self.log_action(
-            "client_assigned",
-            user_id=assigned_by_user_id,
+            "client_assigned_to_consultant",
+            user_id=assigned_by,
             details={
                 "consultant_id": str(consultant_id),
                 "company_id": str(company_id),
@@ -210,365 +220,655 @@ class ConsultantService(BaseService[ConsultantProfile, type(consultant_crud)]):
         
         return assignment
     
-    def set_target(
-        self,
-        db: Session,
-        *,
+    def record_placement(
+        self, 
+        db: Session, 
+        *, 
         consultant_id: UUID,
-        target_data: ConsultantTargetCreate,
-        set_by_user_id: UUID
-    ):
-        """
-        Set performance target for consultant
+        application_id: UUID,
+        placement_fee: Optional[Decimal] = None
+    ) -> bool:
+        """Record successful placement by consultant"""
+        consultant = self.get(db, id=consultant_id)
+        application = db.query(Application).filter(
+            Application.id == application_id
+        ).first()
         
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
-            target_data: Target data
-            set_by_user_id: User setting the target
-            
-        Returns:
-            Created target
-        """
-        logger.info(f"Setting target for consultant {consultant_id}")
+        if not consultant or not application:
+            return False
         
-        # Verify consultant exists
-        consultant = self.crud.get(db, id=consultant_id)
-        if not consultant:
-            return None
+        # Update consultant metrics
+        consultant.total_placements += 1
+        consultant.successful_placements += 1
+        consultant.this_month_placements += 1
         
-        # Create target
-        target_data.consultant_id = consultant_id
-        target = self.target_crud.create(db, obj_in=target_data)
+        if placement_fee:
+            consultant.total_revenue_generated = (
+                (consultant.total_revenue_generated or 0) + placement_fee
+            )
+            consultant.this_quarter_revenue = (
+                (consultant.this_quarter_revenue or 0) + placement_fee
+            )
         
-        # Log action
-        self.log_action(
-            "target_set",
-            user_id=set_by_user_id,
-            details={
-                "consultant_id": str(consultant_id),
-                "target_type": target_data.target_type,
-                "target_value": str(target_data.target_value)
-            }
+        # Update candidate assignment metrics
+        self.candidate_crud.update_metrics(
+            db,
+            consultant_id=consultant_id,
+            candidate_id=application.candidate_id,
+            metric_type="placement"
         )
         
-        return target
+        # Update client assignment metrics
+        job = application.job
+        if job:
+            self.client_crud.update_performance(
+                db,
+                consultant_id=consultant_id,
+                company_id=job.company_id,
+                metric_type="placement"
+            )
+        
+        db.commit()
+        return True
     
     def create_performance_review(
-        self,
-        db: Session,
-        *,
+        self, 
+        db: Session, 
+        *, 
         consultant_id: UUID,
         review_data: ConsultantPerformanceReviewCreate,
-        reviewer_user_id: UUID
-    ):
-        """
-        Create performance review for consultant
+        reviewer_id: UUID
+    ) -> ConsultantPerformanceReview:
+        """Create performance review for consultant"""
+        # Calculate overall rating
+        ratings = [
+            review_data.communication_rating,
+            review_data.client_satisfaction_rating,
+            review_data.target_achievement_rating,
+            review_data.teamwork_rating,
+            review_data.innovation_rating
+        ]
+        valid_ratings = [r for r in ratings if r is not None]
         
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
-            review_data: Review data
-            reviewer_user_id: User creating the review
-            
-        Returns:
-            Created review
-        """
-        logger.info(f"Creating performance review for consultant {consultant_id}")
-        
-        # Verify consultant exists
-        consultant = self.crud.get(db, id=consultant_id)
-        if not consultant:
-            return None
+        if valid_ratings:
+            review_data.overall_rating = sum(valid_ratings) / len(valid_ratings)
         
         # Create review
-        review_data.consultant_id = consultant_id
-        review_data.reviewer_id = reviewer_user_id
         review = self.review_crud.create(db, obj_in=review_data)
         
-        # Update consultant's next review date
-        if review:
-            self.crud.update(
-                db,
-                id=consultant_id,
-                obj_in={
-                    "last_performance_review": datetime.utcnow(),
-                    "next_performance_review": datetime.utcnow().replace(month=datetime.utcnow().month + 6)
-                }
-            )
+        # Update consultant's average rating if approved
+        if review.status == "approved":
+            self._update_consultant_rating(db, consultant_id)
         
         return review
     
-    def approve_performance_review(
-        self,
-        db: Session,
-        *,
-        review_id: UUID,
-        approved_by_user_id: UUID
-    ):
-        """
-        Approve performance review
-        
-        Args:
-            db: Database session
-            review_id: Review ID
-            approved_by_user_id: User approving
-            
-        Returns:
-            Approved review
-        """
-        logger.info(f"Approving performance review {review_id}")
-        
-        review = self.review_crud.approve_review(db, review_id=review_id)
-        
-        if review:
-            self.log_action(
-                "review_approved",
-                user_id=approved_by_user_id,
-                details={
-                    "review_id": str(review_id),
-                    "consultant_id": str(review.consultant_id)
-                }
-            )
-        
-        return review
-    
-    def search_consultants(
-        self,
-        db: Session,
-        *,
-        filters: ConsultantSearchFilters
-    ) -> tuple[List[ConsultantProfile], int]:
-        """
-        Search consultants with filters
-        
-        Args:
-            db: Database session
-            filters: Search filters
-            
-        Returns:
-            Tuple of (consultants, total_count)
-        """
-        logger.info(f"Searching consultants with filters: {filters}")
-        return self.crud.get_multi_with_search(db, filters=filters)
-    
-    def get_consultant_statistics(
-        self,
-        db: Session,
-        *,
-        consultant_id: UUID
+    def get_team_performance(
+        self, 
+        db: Session, 
+        *, 
+        manager_id: UUID
     ) -> Dict[str, Any]:
-        """
-        Get consultant statistics
+        """Get performance metrics for consultant's team"""
+        # Get team members
+        team_members = db.query(ConsultantProfile).filter(
+            ConsultantProfile.manager_id == manager_id
+        ).all()
         
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
+        if not team_members:
+            return {"team_size": 0, "message": "No team members found"}
+        
+        # Aggregate metrics
+        team_metrics = {
+            "team_size": len(team_members),
+            "total_placements": sum(m.total_placements for m in team_members),
+            "total_revenue": sum(m.total_revenue_generated or 0 for m in team_members),
+            "average_rating": sum(m.average_rating or 0 for m in team_members if m.average_rating) / len(team_members),
+            "members": []
+        }
+        
+        # Individual member performance
+        for member in team_members:
+            current_targets = self.target_crud.get_current_targets(
+                db, 
+                consultant_id=member.id,
+                target_period="monthly"
+            )
             
-        Returns:
-            Statistics dictionary
-        """
-        logger.debug(f"Getting statistics for consultant {consultant_id}")
+            team_metrics["members"].append({
+                "id": member.id,
+                "name": member.user.full_name,
+                "status": member.status,
+                "placements_this_month": member.this_month_placements,
+                "target_achievement": self._calculate_target_achievement(current_targets),
+                "rating": member.average_rating
+            })
         
+        # Sort by performance
+        team_metrics["members"].sort(
+            key=lambda x: x["placements_this_month"], 
+            reverse=True
+        )
+        
+        return team_metrics
+    
+    def get_consultant_availability(
+        self, 
+        db: Session, 
+        *, 
+        skills_required: Optional[List[str]] = None,
+        location: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Find available consultants based on criteria"""
+        query = db.query(ConsultantProfile).filter(
+            and_(
+                ConsultantProfile.status == ConsultantStatus.ACTIVE,
+                ConsultantProfile.availability_status == "available"
+            )
+        )
+        
+        consultants = query.all()
+        
+        # Calculate availability score
+        availability_list = []
+        for consultant in consultants:
+            score = self._calculate_availability_score(consultant)
+            
+            # Check skill match if required
+            if skills_required:
+                skill_match = self._calculate_skill_match(
+                    consultant.specializations or [],
+                    skills_required
+                )
+                if skill_match < 0.3:  # Minimum threshold
+                    continue
+                score *= skill_match
+            
+            availability_list.append({
+                "consultant_id": consultant.id,
+                "name": consultant.user.full_name,
+                "current_load": consultant.current_active_jobs,
+                "capacity": consultant.max_concurrent_assignments or 10,
+                "availability_score": score,
+                "specializations": consultant.specializations,
+                "rating": consultant.average_rating
+            })
+        
+        # Sort by availability score
+        availability_list.sort(key=lambda x: x["availability_score"], reverse=True)
+        
+        return availability_list
+    
+    def generate_performance_report(
+        self, 
+        db: Session, 
+        *, 
+        consultant_id: UUID,
+        start_date: date,
+        end_date: date
+    ) -> Dict[str, Any]:
+        """Generate detailed performance report for consultant"""
         consultant = self.crud.get_with_details(db, id=consultant_id)
         if not consultant:
             return {}
         
-        # Current month stats
-        current_month = date.today().replace(day=1)
-        current_targets = self.target_crud.get_current_targets(
-            db,
+        # Get applications handled in period
+        applications = db.query(Application).filter(
+            and_(
+                Application.consultant_id == consultant_id,
+                Application.applied_at >= start_date,
+                Application.applied_at <= end_date
+            )
+        ).all()
+        
+        report = {
+            "consultant": {
+                "id": consultant.id,
+                "name": consultant.user.full_name,
+                "department": consultant.department,
+                "manager": consultant.manager.user.full_name if consultant.manager else None
+            },
+            "period": {
+                "start": start_date,
+                "end": end_date
+            },
+            "metrics": {
+                "applications_managed": len(applications),
+                "interviews_scheduled": sum(1 for a in applications if a.interview_date),
+                "offers_made": sum(1 for a in applications if a.status == ApplicationStatus.OFFERED),
+                "successful_placements": sum(1 for a in applications if a.status == ApplicationStatus.HIRED),
+                "rejection_rate": (
+                    sum(1 for a in applications if a.status == ApplicationStatus.REJECTED) / 
+                    len(applications) * 100
+                ) if applications else 0
+            },
+            "client_metrics": self._get_client_metrics(db, consultant_id, start_date, end_date),
+            "revenue_generated": self._calculate_period_revenue(db, consultant_id, start_date, end_date),
+            "target_achievement": self._get_target_achievement_details(db, consultant_id, start_date, end_date),
+            "strengths": [],
+            "areas_for_improvement": []
+        }
+        
+        # Analyze performance
+        if report["metrics"]["successful_placements"] > 5:
+            report["strengths"].append("High placement rate")
+        
+        if report["metrics"]["rejection_rate"] > 50:
+            report["areas_for_improvement"].append("High rejection rate - review candidate screening process")
+        
+        return report
+    
+    def _create_initial_targets(self, db: Session, consultant_id: UUID):
+        """Create initial targets for new consultant"""
+        current_date = datetime.utcnow()
+        
+        # Monthly target
+        monthly_target = ConsultantTargetCreate(
+            consultant_id=consultant_id,
+            target_period="monthly",
+            target_year=current_date.year,
+            target_month=current_date.month,
+            placement_target=2,  # Start with modest targets
+            revenue_target=Decimal("10000"),
+            client_satisfaction_target=Decimal("4.0")
+        )
+        self.target_crud.create(db, obj_in=monthly_target)
+        
+        # Quarterly target
+        quarter = (current_date.month - 1) // 3 + 1
+        quarterly_target = ConsultantTargetCreate(
+            consultant_id=consultant_id,
+            target_period="quarterly",
+            target_year=current_date.year,
+            target_quarter=quarter,
+            placement_target=6,
+            revenue_target=Decimal("30000"),
+            client_satisfaction_target=Decimal("4.0")
+        )
+        self.target_crud.create(db, obj_in=quarterly_target)
+    
+    def _assign_to_manager(self, db: Session, consultant_id: UUID, manager_id: UUID):
+        """Assign consultant to manager"""
+        consultant = self.get(db, id=consultant_id)
+        manager = self.get(db, id=manager_id)
+        
+        if consultant and manager:
+            consultant.manager_id = manager_id
+            db.commit()
+    
+    def _handle_consultant_deactivation(self, db: Session, consultant_id: UUID):
+        """Handle consultant deactivation - reassign work"""
+        # Deactivate all candidate assignments
+        db.query(ConsultantCandidate).filter(
+            and_(
+                ConsultantCandidate.consultant_id == consultant_id,
+                ConsultantCandidate.is_active == True
+            )
+        ).update({"is_active": False, "unassigned_date": datetime.utcnow()})
+        
+        # Deactivate all client assignments
+        db.query(ConsultantClient).filter(
+            and_(
+                ConsultantClient.consultant_id == consultant_id,
+                ConsultantClient.is_active == True
+            )
+        ).update({"is_active": False, "unassigned_date": datetime.utcnow()})
+        
+        # Find applications that need reassignment
+        active_applications = db.query(Application).filter(
+            and_(
+                Application.consultant_id == consultant_id,
+                Application.status.in_([
+                    ApplicationStatus.UNDER_REVIEW,
+                    ApplicationStatus.INTERVIEWED
+                ])
+            )
+        ).all()
+        
+        # Log applications needing reassignment
+        if active_applications:
+            self.log_action(
+                "consultant_deactivation_reassignment_needed",
+                user_id=consultant_id,
+                details={
+                    "applications_needing_reassignment": [
+                        str(a.id) for a in active_applications
+                    ]
+                }
+            )
+    
+    def _get_current_period_metrics(
+        self, 
+        db: Session, 
+        consultant_id: UUID
+    ) -> Dict[str, Any]:
+        """Get current period performance metrics"""
+        consultant = self.get(db, id=consultant_id)
+        if not consultant:
+            return {}
+        
+        current_date = datetime.utcnow()
+        month_start = date(current_date.year, current_date.month, 1)
+        
+        # Get applications this month
+        month_applications = db.query(Application).filter(
+            and_(
+                Application.consultant_id == consultant_id,
+                Application.applied_at >= month_start
+            )
+        ).all()
+        
+        return {
+            "placements_this_month": consultant.this_month_placements,
+            "applications_this_month": len(month_applications),
+            "interviews_scheduled": sum(
+                1 for a in month_applications 
+                if a.interview_date and a.interview_date >= datetime.utcnow()
+            ),
+            "revenue_this_quarter": consultant.this_quarter_revenue or 0
+        }
+    
+    def _get_current_targets(
+        self, 
+        db: Session, 
+        consultant_id: UUID
+    ) -> Dict[str, Any]:
+        """Get current period targets and achievement"""
+        monthly_target = self.target_crud.get_current_targets(
+            db, 
             consultant_id=consultant_id,
             target_period="monthly"
         )
         
-        # Performance metrics
-        latest_review = self.review_crud.get_latest_review(db, consultant_id=consultant_id)
-        
-        # Assignment counts
-        active_candidates = len([a for a in consultant.candidate_assignments if a.is_active])
-        active_clients = len([a for a in consultant.client_assignments if a.is_active])
-        
-        # Calculate achievement percentage
-        achievement_percentage = 0
-        if current_targets:
-            if current_targets.placement_target and current_targets.placement_target > 0:
-                achievement_percentage = (
-                    current_targets.actual_placements / current_targets.placement_target * 100
-                )
+        if not monthly_target:
+            return {"message": "No targets set"}
         
         return {
-            "consultant_id": str(consultant_id),
-            "status": consultant.status.value,
-            "performance_metrics": {
-                "total_placements": consultant.total_placements,
-                "successful_placements": consultant.successful_placements,
-                "average_rating": float(consultant.average_rating) if consultant.average_rating else None,
-                "total_revenue_generated": float(consultant.total_revenue_generated) if consultant.total_revenue_generated else 0
-            },
-            "current_month": {
-                "placements": consultant.this_month_placements,
-                "revenue": float(consultant.this_quarter_revenue) if consultant.this_quarter_revenue else 0,
-                "target_achievement": round(achievement_percentage, 2)
-            },
-            "assignments": {
-                "active_candidates": active_candidates,
-                "active_clients": active_clients,
-                "total_active": consultant.current_active_jobs
-            },
-            "latest_review": {
-                "overall_rating": float(latest_review.overall_rating) if latest_review else None,
-                "review_date": latest_review.review_period_end if latest_review else None
+            "monthly": {
+                "placement_target": monthly_target.placement_target,
+                "placement_actual": monthly_target.actual_placements,
+                "placement_achievement": (
+                    (monthly_target.actual_placements / monthly_target.placement_target * 100)
+                    if monthly_target.placement_target else 0
+                ),
+                "revenue_target": monthly_target.revenue_target,
+                "revenue_actual": monthly_target.actual_revenue,
+                "revenue_achievement": (
+                    (monthly_target.actual_revenue / monthly_target.revenue_target * 100)
+                    if monthly_target.revenue_target else 0
+                )
             }
         }
     
-    def update_consultant_status(
-        self,
-        db: Session,
-        *,
+    def _get_recent_activity(
+        self, 
+        db: Session, 
         consultant_id: UUID,
-        status: ConsultantStatus,
-        updated_by_user_id: UUID,
-        reason: Optional[str] = None
-    ) -> Optional[ConsultantProfile]:
-        """
-        Update consultant status
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Get recent consultant activity"""
+        # Get recent applications
+        recent_apps = db.query(Application).filter(
+            Application.consultant_id == consultant_id
+        ).order_by(
+            desc(Application.last_updated)
+        ).limit(limit).all()
         
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
-            status: New status
-            updated_by_user_id: User updating status
-            reason: Optional reason for status change
-            
-        Returns:
-            Updated consultant profile
-        """
-        logger.info(f"Updating consultant {consultant_id} status to {status}")
+        activities = []
+        for app in recent_apps:
+            activities.append({
+                "type": "application_update",
+                "date": app.last_updated,
+                "description": f"Updated application for {app.candidate.user.full_name}",
+                "status": app.status
+            })
         
-        consultant = self.crud.update(db, id=consultant_id, obj_in={"status": status})
-        
-        if consultant:
-            self.log_action(
-                "consultant_status_change",
-                user_id=updated_by_user_id,
-                details={
-                    "consultant_id": str(consultant_id),
-                    "new_status": status.value,
-                    "reason": reason
-                }
-            )
-            
-            # If suspending consultant, may need to reassign candidates/clients
-            if status == ConsultantStatus.SUSPENDED:
-                logger.warning(f"Consultant {consultant_id} suspended - consider reassigning active cases")
-        
-        return consultant
+        return activities
     
-    def get_consultant_workload(
-        self,
-        db: Session,
-        *,
+    def _get_upcoming_tasks(
+        self, 
+        db: Session, 
         consultant_id: UUID
-    ) -> Dict[str, Any]:
-        """
-        Get consultant workload information
+    ) -> List[Dict[str, Any]]:
+        """Get upcoming tasks for consultant"""
+        tasks = []
         
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
+        # Upcoming interviews
+        upcoming_interviews = db.query(Application).filter(
+            and_(
+                Application.consultant_id == consultant_id,
+                Application.interview_date >= datetime.utcnow()
+            )
+        ).order_by(asc(Application.interview_date)).limit(5).all()
+        
+        for app in upcoming_interviews:
+            tasks.append({
+                "type": "interview",
+                "date": app.interview_date,
+                "title": f"Interview: {app.candidate.user.full_name}",
+                "job": app.job.title,
+                "priority": "high"
+            })
+        
+        # Pending offers
+        pending_offers = db.query(Application).filter(
+            and_(
+                Application.consultant_id == consultant_id,
+                Application.status == ApplicationStatus.OFFERED,
+                Application.offer_response == "pending"
+            )
+        ).all()
+        
+        for app in pending_offers:
+            tasks.append({
+                "type": "follow_up",
+                "date": app.offer_expiry_date,
+                "title": f"Follow up on offer: {app.candidate.user.full_name}",
+                "priority": "high"
+            })
+        
+        # Sort by date
+        tasks.sort(key=lambda x: x["date"] if x["date"] else datetime.max)
+        
+        return tasks[:10]
+    
+    def _get_performance_trend(
+        self, 
+        db: Session, 
+        consultant_id: UUID,
+        months: int = 6
+    ) -> List[Dict[str, Any]]:
+        """Get performance trend over time"""
+        trend = []
+        current_date = datetime.utcnow()
+        
+        for i in range(months):
+            month_date = current_date - timedelta(days=30 * i)
+            month_start = date(month_date.year, month_date.month, 1)
             
-        Returns:
-            Workload information
-        """
-        consultant = self.crud.get(db, id=consultant_id)
-        if not consultant:
-            return {}
+            if month_date.month == 12:
+                month_end = date(month_date.year + 1, 1, 1)
+            else:
+                month_end = date(month_date.year, month_date.month + 1, 1)
+            
+            # Get metrics for month
+            placements = db.query(func.count(Application.id)).filter(
+                and_(
+                    Application.consultant_id == consultant_id,
+                    Application.status == ApplicationStatus.HIRED,
+                    Application.last_updated >= month_start,
+                    Application.last_updated < month_end
+                )
+            ).scalar()
+            
+            trend.append({
+                "month": month_date.strftime("%Y-%m"),
+                "placements": placements or 0
+            })
         
-        # Get active assignments
-        active_candidates = self.candidate_crud.get_consultant_candidates(
-            db,
-            consultant_id=consultant_id,
-            limit=1000
+        trend.reverse()
+        return trend
+    
+    def _update_consultant_rating(self, db: Session, consultant_id: UUID):
+        """Update consultant's average rating from reviews"""
+        reviews = self.review_crud.get_by_consultant(db, consultant_id=consultant_id)
+        approved_reviews = [r for r in reviews if r.status == "approved" and r.overall_rating]
+        
+        if approved_reviews:
+            avg_rating = sum(r.overall_rating for r in approved_reviews) / len(approved_reviews)
+            consultant = self.get(db, id=consultant_id)
+            if consultant:
+                consultant.average_rating = Decimal(str(round(avg_rating, 2)))
+                db.commit()
+    
+    def _calculate_target_achievement(
+        self, 
+        target: Optional[ConsultantTarget]
+    ) -> float:
+        """Calculate overall target achievement percentage"""
+        if not target:
+            return 0.0
+        
+        achievements = []
+        
+        if target.placement_target:
+            achievements.append(
+                (target.actual_placements / target.placement_target) * 100
+            )
+        
+        if target.revenue_target:
+            achievements.append(
+                (target.actual_revenue / target.revenue_target) * 100
+            )
+        
+        return sum(achievements) / len(achievements) if achievements else 0.0
+    
+    def _calculate_availability_score(
+        self, 
+        consultant: ConsultantProfile
+    ) -> float:
+        """Calculate consultant availability score"""
+        max_capacity = consultant.max_concurrent_assignments or 10
+        current_load = consultant.current_active_jobs
+        
+        # Base availability on current load
+        load_ratio = current_load / max_capacity
+        availability = 1.0 - load_ratio
+        
+        # Adjust for performance
+        if consultant.average_rating:
+            availability *= (consultant.average_rating / 5.0)
+        
+        return max(0, min(1, availability))
+    
+    def _calculate_skill_match(
+        self, 
+        consultant_skills: List[str], 
+        required_skills: List[str]
+    ) -> float:
+        """Calculate skill match percentage"""
+        if not required_skills:
+            return 1.0
+        
+        if not consultant_skills:
+            return 0.0
+        
+        # Convert to lowercase for comparison
+        consultant_skills_lower = [s.lower() for s in consultant_skills]
+        matches = sum(
+            1 for skill in required_skills 
+            if skill.lower() in consultant_skills_lower
         )
-        active_candidates = [a for a in active_candidates if a.is_active]
         
-        active_clients = self.client_crud.get_consultant_clients(
-            db,
-            consultant_id=consultant_id,
-            limit=1000
-        )
-        active_clients = [a for a in active_clients if a.is_active]
+        return matches / len(required_skills)
+    
+    def _get_client_metrics(
+        self, 
+        db: Session, 
+        consultant_id: UUID,
+        start_date: date,
+        end_date: date
+    ) -> Dict[str, Any]:
+        """Get client-related metrics for period"""
+        client_assignments = db.query(ConsultantClient).filter(
+            ConsultantClient.consultant_id == consultant_id
+        ).all()
         
-        # Calculate workload score (simple example)
-        workload_score = len(active_candidates) + (len(active_clients) * 2)
-        max_workload = consultant.max_concurrent_assignments or 10
-        workload_percentage = (workload_score / max_workload) * 100
+        active_clients = [c for c in client_assignments if c.is_active]
         
         return {
-            "consultant_id": str(consultant_id),
-            "active_candidates": len(active_candidates),
+            "total_clients": len(client_assignments),
             "active_clients": len(active_clients),
-            "max_concurrent_assignments": max_workload,
-            "workload_percentage": round(workload_percentage, 2),
-            "availability_status": consultant.availability_status,
-            "can_accept_more": workload_percentage < 80
+            "primary_clients": sum(1 for c in active_clients if c.is_primary),
+            "new_clients": sum(
+                1 for c in client_assignments 
+                if start_date <= c.assigned_date.date() <= end_date
+            )
         }
     
-    def record_placement(
-        self,
-        db: Session,
-        *,
+    def _calculate_period_revenue(
+        self, 
+        db: Session, 
         consultant_id: UUID,
-        candidate_id: UUID,
-        company_id: UUID,
-        placement_value: Optional[float] = None
-    ):
-        """
-        Record successful placement by consultant
+        start_date: date,
+        end_date: date
+    ) -> Decimal:
+        """Calculate revenue generated in period"""
+        # This is simplified - would need actual placement fee tracking
+        placements = db.query(Application).filter(
+            and_(
+                Application.consultant_id == consultant_id,
+                Application.status == ApplicationStatus.HIRED,
+                Application.last_updated >= start_date,
+                Application.last_updated <= end_date
+            )
+        ).all()
         
-        Args:
-            db: Database session
-            consultant_id: Consultant ID
-            candidate_id: Candidate ID
-            company_id: Company ID
-            placement_value: Optional placement revenue
-        """
-        logger.info(f"Recording placement by consultant {consultant_id}")
+        # Estimate based on average placement fee
+        avg_placement_fee = Decimal("5000")  # Would come from config
+        return len(placements) * avg_placement_fee
+    
+    def _get_target_achievement_details(
+        self, 
+        db: Session, 
+        consultant_id: UUID,
+        start_date: date,
+        end_date: date
+    ) -> Dict[str, Any]:
+        """Get detailed target achievement for period"""
+        # Get all targets in period
+        targets = db.query(ConsultantTarget).filter(
+            and_(
+                ConsultantTarget.consultant_id == consultant_id,
+                ConsultantTarget.target_year >= start_date.year,
+                ConsultantTarget.target_year <= end_date.year
+            )
+        ).all()
         
-        # Update consultant metrics
-        consultant = self.crud.get(db, id=consultant_id)
-        if consultant:
-            consultant.total_placements += 1
-            consultant.successful_placements += 1
-            consultant.this_month_placements += 1
-            
-            if placement_value and consultant.commission_rate:
-                commission = placement_value * float(consultant.commission_rate)
-                consultant.total_revenue_generated = (
-                    float(consultant.total_revenue_generated or 0) + commission
+        achievement_summary = {
+            "targets_met": 0,
+            "total_targets": len(targets),
+            "details": []
+        }
+        
+        for target in targets:
+            is_achieved = target.is_achieved
+            achievement_summary["details"].append({
+                "period": f"{target.target_period} {target.target_year}/{target.target_month or target.target_quarter}",
+                "achieved": is_achieved,
+                "placement_achievement": (
+                    (target.actual_placements / target.placement_target * 100)
+                    if target.placement_target else None
+                ),
+                "revenue_achievement": (
+                    (target.actual_revenue / target.revenue_target * 100)
+                    if target.revenue_target else None
                 )
-                consultant.this_quarter_revenue = (
-                    float(consultant.this_quarter_revenue or 0) + commission
-                )
+            })
             
-            db.commit()
+            if is_achieved:
+                achievement_summary["targets_met"] += 1
         
-        # Update assignment metrics
-        self.candidate_crud.update_metrics(
-            db,
-            consultant_id=consultant_id,
-            candidate_id=candidate_id,
-            metric_type="placement"
-        )
-        
-        self.client_crud.update_performance(
-            db,
-            consultant_id=consultant_id,
-            company_id=company_id,
-            metric_type="placement",
-            value=placement_value
-        )
+        return achievement_summary
 
 
 # Create service instance
