@@ -14,17 +14,35 @@ from app.schemas.application import (
     ScheduleInterview, MakeOffer, BulkApplicationUpdate,
     ApplicationSearchFilters
 )
-from app.crud import application as application_crud
+from app.crud import application as application_crud,application_status_history,application_note
 from app.services.base import BaseService
+from app.crud.application import CRUDApplication
 
 
-class ApplicationService(BaseService[Application, application_crud.CRUDApplication]):
+class ApplicationService(BaseService[Application, CRUDApplication]):
     """Service for application management and workflow"""
     
     def __init__(self):
-        super().__init__(application_crud.application)
-        self.status_history_crud = application_crud.application_status_history
-        self.note_crud = application_crud.application_note
+        super().__init__(application_crud)
+        self.status_history_crud = application_status_history
+        self.note_crud = application_note
+    
+    async def search_applications(
+        self, 
+        db: Session, 
+        query: str, 
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """Search applications - placeholder implementation"""
+        # For now, return empty results
+        # TODO: Implement actual search logic
+        return {
+            "applications": [],
+            "total": 0
+        }
     
     def submit_application(
         self, 
@@ -52,7 +70,7 @@ class ApplicationService(BaseService[Application, application_crud.CRUDApplicati
             raise ValueError("Job is not available for applications")
         
         # Create application
-        application_data_dict = application_data.dict()
+        application_data_dict = application_data.model_dump()
         application_data_dict.update({
             "candidate_id": candidate_id,
             "job_id": job_id,
@@ -385,7 +403,7 @@ class ApplicationService(BaseService[Application, application_crud.CRUDApplicati
             user_id=processed_by,
             details={
                 "application_count": len(bulk_update.application_ids),
-                "updates": bulk_update.dict(exclude={'application_ids'})
+                "updates": bulk_update.model_dump(exclude={'application_ids'})
             }
         )
         

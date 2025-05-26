@@ -151,7 +151,7 @@ class CRUDMessage(CRUDBase[Message, MessageCreate, MessageUpdate]):
     
     def create_message(self, db: Session, *, message_data: MessageCreate) -> Message:
         """Create a new message and update conversation activity"""
-        message = Message(**message_data.dict())
+        message = Message(**message_data.model_dump())
         message.sent_at = datetime.utcnow()
         db.add(message)
         db.flush()

@@ -1,348 +1,763 @@
-from fastapi import APIRouter, HTTPException, Query, Body
-from typing import List, Optional, Dict, Any
-import json
-from pathlib import Path
-import os
-from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from sqlalchemy.orm import Session
+from typing import Optional, List, Dict, Any
+from uuid import UUID
+
+from app.api.v1.deps import (
+    get_database, get_current_active_user, get_admin_user,
+    get_employer_user, get_pagination_params, PaginationParams,
+    check_company_access, get_common_filters, CommonFilters
+)
+from app.services.company import company_service
+from app.schemas.employer import (
+    CompanyCreate, CompanyUpdate, Company, CompanyStats,
+    CompanySearchFilters, CompanyListResponse,
+    CompanyContact, CompanyContactCreate, CompanyContactUpdate,
+    CompanyHiringPreferences, CompanyHiringPreferencesCreate, CompanyHiringPreferencesUpdate,
+    RecruitmentHistory, RecruitmentHistoryCreate, RecruitmentHistoryUpdate,
+    EmployerProfile, EmployerProfileCreate, EmployerProfileUpdate
+)
+from app.models.user import User
+from app.models.enums import UserRole
 
 router = APIRouter()
 
-# Helper function to load data
-def load_data(filename):
-    try:
-        file_path = Path(f"fake_data/{filename}")
-        with open(file_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading {filename}: {e}")
-        return []
-
-# Load related data
-def get_all_data():
-    companies = load_data("company_profiles.json")
-    employer_profiles = load_data("employer_profiles.json")
-    users = load_data("users.json")
-    jobs = load_data("jobs.json")
+@router.get("/", response_model=CompanyListResponse)
+async def list_companies(
+    # Search and filtering
+    name: Optional[str] = Query(None, description="Search by company name"),
+    industry: Optional[str] = Query(None, description="Filter by industry"),
+    company_size: Optional[str] = Query(None, description="Filter by company size"),
+    location: Optional[str] = Query(None, description="Filter by location"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
     
-    # Combine company_profiles and employer_profiles
-    all_companies = []
+    # Pagination and common filters
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
     
-    # Process company profiles
-    for company in companies:
-        employer_user_id = company.get("user_id")
-        user = next((u for u in users if u["id"] == employer_user_id), None)
-        
-        if user:
-            # Calculate open positions
-            open_jobs = 0
-            job_ids = company.get("job_ids", [])
-            company_jobs = []
-            
-            for job_id in job_ids:
-                job = next((j for j in jobs if j["id"] == job_id), None)
-                if job:
-                    if job.get("status", "").lower() == "open":
-                        open_jobs += 1
-                    company_jobs.append(job)
-            
-            contact = company.get("contact_details", {})
-            
-            # Format for frontend schema
-            enhanced_company = {
-                "id": f"comp-{company['id']}",
-                "name": company["company_name"],
-                "industry": company["industry"],
-                "size": company.get("size", "Unknown"),
-                "website": company.get("website", ""),
-                "logoUrl": company.get("logo_url", ""),
-                "contactPerson": contact.get("name", ""),
-                "contactTitle": contact.get("title", ""),
-                "contactEmail": contact.get("email", ""),
-                "contactPhone": contact.get("phone", ""),
-                "address": company.get("location", ""),
-                "description": company.get("description", ""),
-                "createdAt": datetime.fromisoformat(user["created_at"]) if isinstance(user["created_at"], str) else datetime.now(),
-                "updatedAt": datetime.fromisoformat(user["updated_at"]) if isinstance(user["updated_at"], str) else datetime.now(),
-                "openPositions": open_jobs,
-                "totalHires": len(company.get("recruitment_history", [])),
-                "jobIds": job_ids,
-                "jobs": format_jobs(company_jobs),
-                "officeId": str((company["id"] % 3) + 1)  # Mock office assignment
-            }
-            all_companies.append(enhanced_company)
-    
-    # Process employer profiles (these are also companies)
-    for employer in employer_profiles:
-        # Check if this employer is already included from company_profiles
-        if any(comp.get("id") == f"comp-{employer['id']}" for comp in all_companies):
-            continue
-            
-        employer_user_id = employer.get("user_id")
-        user = next((u for u in users if u["id"] == employer_user_id), None)
-        
-        if user:
-            # Calculate open positions
-            open_jobs = 0
-            job_ids = employer.get("job_ids", [])
-            employer_jobs = []
-            
-            for job_id in job_ids:
-                job = next((j for j in jobs if j["id"] == job_id), None)
-                if job:
-                    if job.get("status", "").lower() == "open":
-                        open_jobs += 1
-                    employer_jobs.append(job)
-            
-            contact = employer.get("contact_details", {})
-            
-            # Format for frontend schema
-            enhanced_company = {
-                "id": f"comp-{employer['id']}",
-                "name": employer["company_name"],
-                "industry": employer["industry"],
-                "size": employer.get("size", "Unknown"),
-                "website": employer.get("website", ""),
-                "logoUrl": employer.get("logo_url", ""),
-                "contactPerson": contact.get("name", ""),
-                "contactTitle": contact.get("title", ""),
-                "contactEmail": contact.get("email", ""),
-                "contactPhone": contact.get("phone", ""),
-                "address": employer.get("location", ""),
-                "description": employer.get("description", ""),
-                "createdAt": datetime.fromisoformat(user["created_at"]) if isinstance(user["created_at"], str) else datetime.now(),
-                "updatedAt": datetime.fromisoformat(user["updated_at"]) if isinstance(user["updated_at"], str) else datetime.now(),
-                "openPositions": open_jobs,
-                "totalHires": len(employer.get("recruitment_history", [])),
-                "jobIds": job_ids,
-                "jobs": format_jobs(employer_jobs),
-                "officeId": str((employer["id"] % 3) + 1)  # Mock office assignment
-            }
-            all_companies.append(enhanced_company)
-    
-    return all_companies
-
-def format_jobs(jobs):
-    """Format job data for frontend display"""
-    return [
-        {
-            "id": str(job["id"]),
-            "title": job["title"],
-            "status": job.get("status", "Open").lower(),
-            "location": job.get("location", "Remote"),
-            "contractType": job.get("contract_type", "Permanent"),
-            "postingDate": job.get("posting_date", "")
-        }
-        for job in jobs
-    ]
-
-@router.get("/")
-async def get_companies(
-    office_id: Optional[str] = None,
-    industry: Optional[str] = None,
-    search: Optional[str] = None,
-    has_open_positions: Optional[bool] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100)
+    # Authentication
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
-    """Get all companies, optionally filtered by various parameters"""
-    companies = get_all_data()
-    
-    # Filter by office if provided
-    if office_id:
-        companies = [c for c in companies if c["officeId"] == office_id]
-    
-    # Filter by industry if provided
-    if industry:
-        industry_lower = industry.lower()
-        companies = [c for c in companies if industry_lower in c["industry"].lower()]
-    
-    # Filter by open positions
-    if has_open_positions is not None:
-        if has_open_positions:
-            companies = [c for c in companies if c["openPositions"] > 0]
-        else:
-            companies = [c for c in companies if c["openPositions"] == 0]
-    
-    # Filter by search term if provided
-    if search:
-        search_lower = search.lower()
-        companies = [c for c in companies if 
-                   search_lower in c["name"].lower() or 
-                   search_lower in c["industry"].lower() or 
-                   search_lower in c["description"].lower() or
-                   search_lower in c["address"].lower() or
-                   search_lower in c["contactPerson"].lower()]
-    
-    # Get total count before pagination
-    total_count = len(companies)
-    
-    # Apply pagination
-    companies = companies[skip:skip + limit]
-    
-    return {
-        "items": companies,
-        "totalCount": total_count,
-        "page": skip // limit + 1 if limit > 0 else 1,
-        "pageSize": limit,
-        "pageCount": (total_count + limit - 1) // limit if limit > 0 else 1
-    }
+    """
+    List companies with search and filtering.
+    All authenticated users can view companies.
+    """
+    try:
+        # Build search filters
+        search_filters = CompanySearchFilters(
+            name=name or filters.q,
+            industry=industry,
+            company_size=company_size,
+            location=location,
+            is_active=is_active,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            sort_by=filters.sort_by or "name",
+            sort_order=filters.sort_order
+        )
+        
+        companies, total = company_service.get_companies_with_search(
+            db, filters=search_filters
+        )
+        
+        return CompanyListResponse(
+            companies=companies,
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving companies: {str(e)}"
+        )
 
-@router.get("/{company_id}")
-async def get_company(company_id: str):
-    """Get a specific company by ID"""
-    companies = get_all_data()
-    company = next((c for c in companies if c["id"] == company_id), None)
-    
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
-    
-    # Get additional company details
-    # In a real application, this would pull from database with more detailed info
-    
-    # Get related jobs with more detail
-    jobs_data = load_data("jobs.json")
-    skills_data = load_data("skills.json")
-    job_ids = [int(job_id.replace("job-", "")) for job_id in company.get("jobIds", [])]
-    
-    # Create skill lookup
-    skill_lookup = {skill["id"]: skill["name"] for skill in skills_data}
-    
-    # Get detailed jobs
-    detailed_jobs = []
-    for job_id in job_ids:
-        job = next((j for j in jobs_data if j["id"] == job_id), None)
-        if job:
-            # Format skills
-            job_skills = [{"id": str(skill_id), "name": skill_lookup.get(skill_id, f"Skill-{skill_id}")} 
-                          for skill_id in job.get("skills", [])]
-            
-            detailed_job = {
-                "id": str(job["id"]),
-                "title": job["title"],
-                "description": job["description"],
-                "location": job.get("location", "Remote"),
-                "contractType": job.get("contract_type", "Permanent"),
-                "remoteOption": job.get("remote_option", False),
-                "status": job.get("status", "Open").lower(),
-                "postingDate": job.get("posting_date", ""),
-                "skills": job_skills,
-                "requirements": job.get("requirements", []),
-                "responsibilities": job.get("responsibilities", [])
-            }
-            detailed_jobs.append(detailed_job)
-    
-    # Add detailed jobs to company
-    company["detailedJobs"] = detailed_jobs
-    
-    # Add hire history
-    company_id_raw = int(company_id.replace("comp-", ""))
-    
-    # First check in company_profiles
-    companies_data = load_data("company_profiles.json")
-    company_data = next((c for c in companies_data if c["id"] == company_id_raw), None)
-    
-    # If not found, check in employer_profiles
-    if not company_data:
-        employers_data = load_data("employer_profiles.json")
-        company_data = next((e for e in employers_data if e["id"] == company_id_raw), None)
-    
-    # Add recruitment history
-    if company_data and "recruitment_history" in company_data:
-        company["recruitmentHistory"] = company_data["recruitment_history"]
-    
-    return company
+@router.post("/", response_model=Company)
+async def create_company(
+    company_data: CompanyCreate,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Create a new company.
+    Only admins and superadmins can create companies.
+    """
+    try:
+        company = company_service.create_company(
+            db,
+            company_data=company_data,
+            created_by=current_user.id
+        )
+        return company
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating company: {str(e)}"
+        )
 
-@router.post("/")
-async def create_company(company: Dict[str, Any] = Body(...)):
-    """Create a new company (mock implementation)"""
-    # In a real implementation, we would save to the database
-    # For this mock API, we'll just return the company with an ID
-    company["id"] = f"comp-new-{datetime.now().timestamp()}"
-    company["createdAt"] = datetime.now()
-    company["updatedAt"] = datetime.now()
-    company["openPositions"] = 0
-    company["totalHires"] = 0
-    
-    if "jobIds" not in company:
-        company["jobIds"] = []
-    if "jobs" not in company:
-        company["jobs"] = []
-    
-    return company
+@router.get("/{company_id}", response_model=Company)
+async def get_company(
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get company details by ID.
+    All authenticated users can view company details.
+    """
+    try:
+        company = company_service.get_company_with_details(db, id=company_id)
+        if not company:
+            raise HTTPException(
+                status_code=404,
+                detail="Company not found"
+            )
+        
+        return company
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving company: {str(e)}"
+        )
 
-@router.put("/{company_id}")
-async def update_company(company_id: str, company: Dict[str, Any] = Body(...)):
-    """Update a company (mock implementation)"""
-    companies = get_all_data()
-    existing = next((c for c in companies if c["id"] == company_id), None)
+@router.put("/{company_id}", response_model=Company)
+async def update_company(
+    company_update: CompanyUpdate,
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update company information.
+    Only employers from the company or admins can update.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to update this company"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to update company"
+        )
     
-    if not existing:
-        raise HTTPException(status_code=404, detail="Company not found")
-    
-    # In a real implementation, we would update the database
-    # For this mock API, we'll just return the updated company
-    updated = {**existing, **company, "updatedAt": datetime.now()}
-    return updated
+    try:
+        updated_company = company_service.update_company(
+            db,
+            company_id=company_id,
+            update_data=company_update,
+            updated_by=current_user.id
+        )
+        if not updated_company:
+            raise HTTPException(
+                status_code=404,
+                detail="Company not found"
+            )
+        return updated_company
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating company: {str(e)}"
+        )
 
 @router.delete("/{company_id}")
-async def delete_company(company_id: str):
-    """Delete a company (mock implementation)"""
-    companies = get_all_data()
-    existing = next((c for c in companies if c["id"] == company_id), None)
-    
-    if not existing:
-        raise HTTPException(status_code=404, detail="Company not found")
-    
-    # In a real implementation, we would remove from the database
-    # For this mock API, we'll just return success
-    return {"success": True, "message": f"Company {company_id} deleted"}
+async def delete_company(
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Delete a company.
+    Only admins and superadmins can delete companies.
+    """
+    try:
+        success = company_service.delete_company(
+            db,
+            company_id=company_id,
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Company not found"
+            )
+        return {"message": "Company deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting company: {str(e)}"
+        )
 
 @router.get("/{company_id}/jobs")
-async def get_company_jobs(company_id: str):
-    """Get all jobs for a specific company"""
-    companies = get_all_data()
-    company = next((c for c in companies if c["id"] == company_id), None)
+async def get_company_jobs(
+    company_id: UUID = Path(..., description="Company ID"),
+    status: Optional[str] = Query(None, description="Filter by job status"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get all jobs posted by a company.
+    All authenticated users can view company jobs.
+    """
+    try:
+        jobs, total = company_service.get_company_jobs(
+            db,
+            company_id=company_id,
+            status=status,
+            skip=pagination.offset,
+            limit=pagination.page_size
+        )
+        
+        return {
+            "items": jobs,
+            "total": total,
+            "page": pagination.page,
+            "page_size": pagination.page_size,
+            "pages": (total + pagination.page_size - 1) // pagination.page_size
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving company jobs: {str(e)}"
+        )
+
+@router.get("/{company_id}/employees", response_model=List[EmployerProfile])
+async def get_company_employees(
+    company_id: UUID = Path(..., description="Company ID"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get company employees/employer profiles.
+    Only company members or admins can view.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to company employees"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to view company employees"
+        )
     
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+    try:
+        employees = company_service.get_company_employees(
+            db,
+            company_id=company_id,
+            skip=pagination.offset,
+            limit=pagination.page_size
+        )
+        return employees
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving company employees: {str(e)}"
+        )
+
+@router.get("/{company_id}/analytics", response_model=CompanyStats)
+async def get_company_analytics(
+    company_id: UUID = Path(..., description="Company ID"),
+    start_date: Optional[str] = Query(None, description="Start date for analytics"),
+    end_date: Optional[str] = Query(None, description="End date for analytics"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get company hiring analytics and statistics.
+    Only company members or admins can view.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to company analytics"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to view company analytics"
+        )
     
-    # Get detailed jobs
-    jobs_data = load_data("jobs.json")
-    skills_data = load_data("skills.json")
+    try:
+        analytics = company_service.get_company_analytics(
+            db,
+            company_id=company_id,
+            start_date=start_date,
+            end_date=end_date
+        )
+        return analytics
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving company analytics: {str(e)}"
+        )
+
+@router.get("/{company_id}/contacts", response_model=List[CompanyContact])
+async def get_company_contacts(
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get company contacts.
+    Only company members or admins can view.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to company contacts"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to view company contacts"
+        )
     
-    # Create skill lookup
-    skill_lookup = {skill["id"]: skill["name"] for skill in skills_data}
+    try:
+        contacts = company_service.get_company_contacts(db, company_id=company_id)
+        return contacts
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving company contacts: {str(e)}"
+        )
+
+@router.post("/{company_id}/contacts", response_model=CompanyContact)
+async def add_company_contact(
+    contact_data: CompanyContactCreate,
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Add a new company contact.
+    Only company members or admins can add contacts.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to add company contacts"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to add company contacts"
+        )
     
-    # Extract job IDs from company
-    job_ids = []
-    if "jobIds" in company:
-        job_ids = company["jobIds"]
+    try:
+        contact = company_service.add_company_contact(
+            db,
+            company_id=company_id,
+            contact_data=contact_data,
+            created_by=current_user.id
+        )
+        return contact
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error adding company contact: {str(e)}"
+        )
+
+@router.put("/{company_id}/contacts/{contact_id}", response_model=CompanyContact)
+async def update_company_contact(
+    contact_update: CompanyContactUpdate,
+    company_id: UUID = Path(..., description="Company ID"),
+    contact_id: UUID = Path(..., description="Contact ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update a company contact.
+    Only company members or admins can update contacts.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to update company contacts"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to update company contacts"
+        )
     
-    # Convert string job IDs to integers
-    job_ids = [int(job_id) if isinstance(job_id, str) and job_id.isdigit() else job_id for job_id in job_ids]
+    try:
+        contact = company_service.update_company_contact(
+            db,
+            contact_id=contact_id,
+            update_data=contact_update,
+            updated_by=current_user.id
+        )
+        if not contact:
+            raise HTTPException(
+                status_code=404,
+                detail="Contact not found"
+            )
+        return contact
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating company contact: {str(e)}"
+        )
+
+@router.delete("/{company_id}/contacts/{contact_id}")
+async def delete_company_contact(
+    company_id: UUID = Path(..., description="Company ID"),
+    contact_id: UUID = Path(..., description="Contact ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Delete a company contact.
+    Only company members or admins can delete contacts.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to delete company contacts"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to delete company contacts"
+        )
     
-    # Get detailed jobs
-    detailed_jobs = []
-    for job_id in job_ids:
-        job = next((j for j in jobs_data if j["id"] == job_id), None)
-        if job:
-            # Format skills
-            job_skills = [{"id": str(skill_id), "name": skill_lookup.get(skill_id, f"Skill-{skill_id}")} 
-                          for skill_id in job.get("skills", [])]
-            
-            detailed_job = {
-                "id": str(job["id"]),
-                "title": job["title"],
-                "description": job["description"],
-                "location": job.get("location", "Remote"),
-                "contractType": job.get("contract_type", "Permanent"),
-                "remoteOption": job.get("remote_option", False),
-                "status": job.get("status", "Open").lower(),
-                "postingDate": job.get("posting_date", ""),
-                "skills": job_skills,
-                "requirements": job.get("requirements", []),
-                "responsibilities": job.get("responsibilities", [])
-            }
-            detailed_jobs.append(detailed_job)
+    try:
+        success = company_service.delete_company_contact(
+            db,
+            contact_id=contact_id,
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Contact not found"
+            )
+        return {"message": "Contact deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting company contact: {str(e)}"
+        )
+
+@router.get("/{company_id}/hiring-preferences", response_model=CompanyHiringPreferences)
+async def get_hiring_preferences(
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get company hiring preferences.
+    Only company members or admins can view.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to company hiring preferences"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to view hiring preferences"
+        )
     
-    return {"jobs": detailed_jobs, "total": len(detailed_jobs)}
+    try:
+        preferences = company_service.get_hiring_preferences(db, company_id=company_id)
+        if not preferences:
+            raise HTTPException(
+                status_code=404,
+                detail="Hiring preferences not found"
+            )
+        return preferences
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving hiring preferences: {str(e)}"
+        )
+
+@router.put("/{company_id}/hiring-preferences", response_model=CompanyHiringPreferences)
+async def update_hiring_preferences(
+    preferences_update: CompanyHiringPreferencesUpdate,
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update company hiring preferences.
+    Only company members or admins can update.
+    """
+    # Check permissions
+    if current_user.role == UserRole.EMPLOYER:
+        if not check_company_access(company_id, current_user, db):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to update hiring preferences"
+            )
+    elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to update hiring preferences"
+        )
+    
+    try:
+        preferences = company_service.update_hiring_preferences(
+            db,
+            company_id=company_id,
+            update_data=preferences_update,
+            updated_by=current_user.id
+        )
+        return preferences
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating hiring preferences: {str(e)}"
+        )
+
+# ============== COMPANY DASHBOARD & ANALYTICS ==============
+
+@router.get("/{company_id}/dashboard-stats")
+async def get_company_dashboard_stats(
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get comprehensive company dashboard statistics.
+    Only company members or admins can view dashboard stats.
+    """
+    try:
+        # Check permissions
+        if current_user.role == UserRole.EMPLOYER:
+            if not company_service.is_company_member(db, company_id=company_id, user_id=current_user.id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied to company dashboard"
+                )
+        elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions to view company dashboard"
+            )
+        
+        stats = company_service.get_company_dashboard_stats(db, company_id=company_id)
+        return stats
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving company dashboard stats: {str(e)}"
+        )
+
+@router.get("/{company_id}/talent-pipeline")
+async def get_company_talent_pipeline(
+    company_id: UUID = Path(..., description="Company ID"),
+    job_id: Optional[UUID] = Query(None, description="Filter by specific job ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get talent pipeline analytics for company.
+    Only company members or admins can view talent pipeline.
+    """
+    try:
+        # Check permissions
+        if current_user.role == UserRole.EMPLOYER:
+            if not company_service.is_company_member(db, company_id=company_id, user_id=current_user.id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied to company talent pipeline"
+                )
+        elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions to view talent pipeline"
+            )
+        
+        pipeline = company_service.get_talent_pipeline(db, company_id=company_id, job_id=job_id)
+        return pipeline
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving talent pipeline: {str(e)}"
+        )
+
+@router.get("/{company_id}/competitor-analysis")
+async def get_company_competitor_analysis(
+    company_id: UUID = Path(..., description="Company ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get competitor analysis for company.
+    Only company members or admins can view competitor analysis.
+    """
+    try:
+        # Check permissions
+        if current_user.role == UserRole.EMPLOYER:
+            if not company_service.is_company_member(db, company_id=company_id, user_id=current_user.id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied to competitor analysis"
+                )
+        elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions to view competitor analysis"
+            )
+        
+        analysis = company_service.get_competitor_analysis(db, company_id=company_id)
+        return analysis
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving competitor analysis: {str(e)}"
+        )
+
+@router.get("/{company_id}/recruitment-efficiency")
+async def get_company_recruitment_efficiency(
+    company_id: UUID = Path(..., description="Company ID"),
+    date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get recruitment efficiency metrics for company.
+    Only company members or admins can view efficiency metrics.
+    """
+    try:
+        # Check permissions
+        if current_user.role == UserRole.EMPLOYER:
+            if not company_service.is_company_member(db, company_id=company_id, user_id=current_user.id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied to recruitment efficiency metrics"
+                )
+        elif current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions to view efficiency metrics"
+            )
+        
+        # Parse dates if provided
+        from datetime import datetime
+        date_from_obj = None
+        date_to_obj = None
+        
+        if date_from:
+            try:
+                date_from_obj = datetime.strptime(date_from, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date_from format. Use YYYY-MM-DD")
+        
+        if date_to:
+            try:
+                date_to_obj = datetime.strptime(date_to, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date_to format. Use YYYY-MM-DD")
+        
+        metrics = company_service.get_recruitment_efficiency_metrics(
+            db, 
+            company_id=company_id,
+            date_from=date_from_obj,
+            date_to=date_to_obj
+        )
+        return metrics
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving recruitment efficiency metrics: {str(e)}"
+        )
+
+@router.post("/create-with-admin", response_model=Company)
+async def create_company_with_admin(
+    company_data: CompanyCreate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Create a new company and assign current user as admin.
+    Only employers can create companies with themselves as admin.
+    """
+    if current_user.role not in [UserRole.EMPLOYER, UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to create company"
+        )
+    
+    try:
+        company = company_service.create_company_with_admin(
+            db,
+            company_data=company_data,
+            admin_user_id=current_user.id
+        )
+        return company
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating company: {str(e)}"
+        )
+
+@router.post("/{company_id}/verify")
+async def verify_company(
+    company_id: UUID = Path(..., description="Company ID"),
+    verification_notes: Optional[str] = Query(None, description="Verification notes"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Verify a company profile.
+    Only admins can verify companies.
+    """
+    try:
+        success = company_service.verify_company(
+            db,
+            company_id=company_id,
+            verified_by=current_user.id,
+            verification_notes=verification_notes
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Company not found"
+            )
+        
+        return {"message": "Company verified successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error verifying company: {str(e)}"
+        )

@@ -118,7 +118,7 @@ class AdminAuditLog(BaseModel):
     # Additional context
     reason = Column(Text, nullable=True)  # Reason for the action
     notes = Column(Text, nullable=True)
-    metadata = Column(JSONB, nullable=True)
+    admin_metadata = Column(JSONB, nullable=True)
     
     # Relationships
     admin = relationship("AdminProfile", back_populates="audit_logs")

@@ -1,5 +1,5 @@
 # app/services/company.py
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
 from uuid import UUID
@@ -29,6 +29,74 @@ class CompanyService(BaseService[Company, employer_crud.CRUDCompany]):
         self.contact_crud = employer_crud.company_contact
         self.preferences_crud = employer_crud.company_hiring_preferences
         self.history_crud = employer_crud.recruitment_history
+    
+    def get_companies_with_search(
+        self, 
+        db: Session, 
+        *, 
+        filters: "CompanySearchFilters"
+    ) -> Tuple[List[Company], int]:
+        """Get companies with search filters and pagination"""
+        query = db.query(Company)
+        
+        # Apply filters
+        search_query = filters.query or filters.name
+        if search_query:
+            search_term = f"%{search_query}%"
+            query = query.filter(
+                or_(
+                    Company.name.ilike(search_term),
+                    Company.description.ilike(search_term),
+                    Company.industry.ilike(search_term)
+                )
+            )
+        
+        if filters.industry:
+            query = query.filter(Company.industry.ilike(f"%{filters.industry}%"))
+            
+        if filters.location:
+            query = query.filter(Company.location.ilike(f"%{filters.location}%"))
+            
+        if filters.company_size:
+            query = query.filter(Company.company_size == filters.company_size)
+            
+        if filters.is_verified is not None:
+            query = query.filter(Company.is_verified == filters.is_verified)
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply sorting
+        if filters.sort_by == "name":
+            if filters.sort_order == "desc":
+                query = query.order_by(Company.name.desc())
+            else:
+                query = query.order_by(Company.name.asc())
+        else:
+            query = query.order_by(Company.created_at.desc())
+        
+        # Apply pagination
+        offset = (filters.page - 1) * filters.page_size
+        companies = query.offset(offset).limit(filters.page_size).all()
+        
+        return companies, total
+    
+    async def search_companies(
+        self, 
+        db: Session, 
+        query: str, 
+        location: Optional[str] = None,
+        company_size: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """Search companies - placeholder implementation"""
+        # For now, return empty results
+        # TODO: Implement actual search logic
+        return {
+            "companies": [],
+            "total": 0
+        }
     
     def create_company_with_admin(
         self, 

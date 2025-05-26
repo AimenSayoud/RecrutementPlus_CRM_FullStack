@@ -12,16 +12,56 @@ from app.schemas.skill import (
     SkillCreate, SkillUpdate, SkillCategoryCreate,
     SkillSearchFilters
 )
-from app.crud import skill as skill_crud
+from app.crud.skill import CRUDSkill, skill, skill_category
 from app.services.base import BaseService
 
 
-class SkillService(BaseService[Skill, skill_crud.CRUDSkill]):
+class SkillService(BaseService[Skill, CRUDSkill]):
     """Service for skill management and analytics"""
     
     def __init__(self):
-        super().__init__(skill_crud.skill)
-        self.category_crud = skill_crud.skill_category
+        super().__init__(skill)
+        self.category_crud = skill_category
+    
+    def get_skills_with_search(
+        self, 
+        db: Session, 
+        *, 
+        filters: "SkillSearchFilters",
+        include_stats: bool = False
+    ) -> Tuple[List[Skill], int]:
+        """Get skills with search filters and pagination"""
+        # Use the basic get_multi method with filters
+        query = db.query(Skill)
+        
+        # Apply filters
+        if filters.query:
+            search_term = f"%{filters.query}%"
+            query = query.filter(Skill.name.ilike(search_term))
+        
+        if filters.category_id:
+            query = query.filter(Skill.category_id == filters.category_id)
+            
+        if filters.is_active is not None:
+            query = query.filter(Skill.is_active == filters.is_active)
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply sorting
+        if filters.sort_by == "name":
+            if filters.sort_order == "desc":
+                query = query.order_by(Skill.name.desc())
+            else:
+                query = query.order_by(Skill.name.asc())
+        else:
+            query = query.order_by(Skill.created_at.desc())
+        
+        # Apply pagination
+        offset = (filters.page - 1) * filters.page_size
+        skills = query.offset(offset).limit(filters.page_size).all()
+        
+        return skills, total
     
     def create_skill_with_category(
         self, 

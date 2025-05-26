@@ -70,7 +70,7 @@ class ApplicationBase(BaseModel):
     
     # Interview information
     interview_date: Optional[datetime] = None
-    interview_type: Optional[str] = Field(None, regex="^(phone|video|in_person|panel)$")
+    interview_type: Optional[str] = Field(None, pattern="^(phone|video|in_person|panel)$")
     interview_feedback: Optional[str] = None
     interview_rating: Optional[int] = Field(None, ge=1, le=5)
     
@@ -79,7 +79,7 @@ class ApplicationBase(BaseModel):
     offer_currency: Optional[str] = Field("EUR", max_length=3)
     offer_date: Optional[date] = None
     offer_expiry_date: Optional[date] = None
-    offer_response: Optional[str] = Field(None, regex="^(pending|accepted|rejected|negotiating)$")
+    offer_response: Optional[str] = Field(None, pattern="^(pending|accepted|rejected|negotiating)$")
     
     # Feedback and notes
     candidate_feedback: Optional[str] = None
@@ -162,8 +162,8 @@ class ApplicationSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("applied_at", regex="^(applied_at|last_updated|status|candidate_name|job_title)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("applied_at", pattern="^(applied_at|last_updated|status|candidate_name|job_title)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class ApplicationListResponse(BaseModel):
@@ -229,7 +229,7 @@ class ApplicationStatusChange(BaseModel):
 
 class ScheduleInterview(BaseModel):
     interview_date: datetime
-    interview_type: str = Field(..., regex="^(phone|video|in_person|panel)$")
+    interview_type: str = Field(..., pattern="^(phone|video|in_person|panel)$")
     location: Optional[str] = None
     notes: Optional[str] = None
     notify_candidate: Optional[bool] = True

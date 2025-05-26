@@ -14,16 +14,75 @@ from app.schemas.job import (
     JobCreate, JobUpdate, JobSearchFilters,
     JobSkillRequirementCreate
 )
-from app.crud import job as job_crud
+from app.crud.job import CRUDJob, job, job_skill_requirement
 from app.services.base import BaseService
 
 
-class JobService(BaseService[Job, job_crud.CRUDJob]):
+class JobService(BaseService[Job, CRUDJob]):
     """Service for job posting and matching operations"""
     
     def __init__(self):
-        super().__init__(job_crud.job)
-        self.skill_requirement_crud = job_crud.job_skill_requirement
+        super().__init__(job)
+        self.skill_requirement_crud = job_skill_requirement
+    
+    def get_jobs_with_search(
+        self, 
+        db: Session, 
+        *, 
+        filters: JobSearchFilters
+    ) -> Tuple[List[Job], int]:
+        """Get jobs with search filters and pagination"""
+        return self.crud.get_multi_with_search(db, filters=filters)
+    
+    def get_job_with_details(self, db: Session, *, job_id: UUID) -> Optional[Job]:
+        """Get a job with all its details and relationships"""
+        from app.models.job import Job
+        from sqlalchemy.orm import joinedload
+        
+        job_with_details = db.query(Job).options(
+            joinedload(Job.company),
+            joinedload(Job.posted_by_user),
+            joinedload(Job.assigned_consultant),
+            joinedload(Job.skill_requirements)
+        ).filter(Job.id == job_id).first()
+        
+        return job_with_details
+    
+    async def search_jobs(
+        self, 
+        db: Session, 
+        query: str, 
+        location: Optional[str] = None,
+        skills: Optional[List[str]] = None,
+        job_type: Optional[str] = None,
+        salary_min: Optional[int] = None,
+        salary_max: Optional[int] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """Search jobs - placeholder implementation"""
+        # For now, return empty results
+        # TODO: Implement actual search logic
+        return {
+            "jobs": [],
+            "total": 0
+        }
+    
+    def create_job(
+        self, 
+        db: Session, 
+        *, 
+        job_data: JobCreate,
+        created_by: UUID
+    ) -> Job:
+        """Create a basic job posting"""
+        # Set the posted_by field from the created_by parameter
+        job_data.posted_by = created_by
+        
+        # Create the job using the CRUD method
+        job = self.crud.create(db, obj_in=job_data)
+        
+        return job
     
     def create_job_with_skills(
         self, 
@@ -46,7 +105,7 @@ class JobService(BaseService[Job, job_crud.CRUDJob]):
             raise ValueError("User does not have permission to post jobs for this company")
         
         # Create job
-        job_data_dict = job_data.dict()
+        job_data_dict = job_data.model_dump()
         job_data_dict["posted_by"] = posted_by
         job = self.crud.create(db, obj_in=JobCreate(**job_data_dict))
         

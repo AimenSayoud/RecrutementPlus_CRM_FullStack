@@ -3,9 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declared_attr, declarative_base
 import uuid
 
-# Create Base here instead of importing from app.db.session
 Base = declarative_base()
-
 
 class TimestampMixin:
     """Mixin for adding timestamp fields to models."""

@@ -35,7 +35,7 @@ class Conversation(BaseModel):
     # Metadata
     description = Column(Text, nullable=True)
     tags = Column(JSONB, nullable=True)  # Array of tags for categorization
-    metadata = Column(JSONB, nullable=True)  # Additional flexible data
+    conversation_data = Column(JSONB, nullable=True)  # Additional flexible data (renamed from conversation_metadata)
     
     # Statistics
     total_messages = Column(Integer, nullable=False, default=0)
@@ -75,7 +75,7 @@ class Message(BaseModel):
     read_at = Column(DateTime, nullable=True)
     
     # Metadata
-    metadata = Column(JSONB, nullable=True)  # Rich content, formatting, etc.
+    message_data = Column(JSONB, nullable=True)  # Rich content, formatting, etc. (renamed from conversation_metadata)
     mentions = Column(JSONB, nullable=True)  # Array of mentioned user IDs
     reactions = Column(JSONB, nullable=True)  # Emoji reactions
     
@@ -90,12 +90,36 @@ class Message(BaseModel):
     template_id = Column(UUID(as_uuid=True), ForeignKey("email_templates.id"), nullable=True)
     template_variables = Column(JSONB, nullable=True)
     
-    # Relationships
+    # Relationships - Fixed with proper foreign_keys specification
     conversation = relationship("Conversation", back_populates="messages")
     sender = relationship("User", foreign_keys=[sender_id])
-    parent_message = relationship("Message", remote_side="Message.id", foreign_keys=[parent_message_id])
-    replies = relationship("Message", remote_side="Message.parent_message_id")
-    reply_to = relationship("Message", remote_side="Message.id", foreign_keys=[reply_to_id])
+    
+    # Parent-child relationships with explicit foreign_keys
+    parent_message = relationship(
+        "Message", 
+        remote_side="Message.id", 
+        foreign_keys=[parent_message_id],
+        back_populates="child_messages"
+    )
+    child_messages = relationship(
+        "Message", 
+        foreign_keys=[parent_message_id],
+        back_populates="parent_message"
+    )
+    
+    # Reply relationships with explicit foreign_keys
+    reply_to = relationship(
+        "Message", 
+        remote_side="Message.id", 
+        foreign_keys=[reply_to_id],
+        back_populates="replies"
+    )
+    replies = relationship(
+        "Message", 
+        foreign_keys=[reply_to_id],
+        back_populates="reply_to"
+    )
+    
     template = relationship("EmailTemplate", foreign_keys=[template_id])
     attachments = relationship("MessageAttachment", back_populates="message", cascade="all, delete-orphan")
     read_receipts = relationship("MessageReadReceipt", back_populates="message", cascade="all, delete-orphan")
@@ -183,7 +207,7 @@ class EmailTemplate(BaseModel):
     # Additional metadata
     description = Column(Text, nullable=True)
     tags = Column(JSONB, nullable=True)
-    metadata = Column(JSONB, nullable=True)
+    template_data = Column(JSONB, nullable=True)  # Additional template metadata (renamed from conversation_metadata)
     
     # Relationships
     created_by = relationship("User", foreign_keys=[created_by_id])

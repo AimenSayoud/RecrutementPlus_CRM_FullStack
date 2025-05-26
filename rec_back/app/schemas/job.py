@@ -1,16 +1,17 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 from decimal import Decimal
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, field_validator, Field, model_validator
 from uuid import UUID
 from app.models.job import JobStatus, JobType, ExperienceLevel
+from app.models.enums import ContractType
 
 
 # Base schemas for Job Skill Requirements
 class JobSkillRequirementBase(BaseModel):
     skill_id: UUID
     is_required: Optional[bool] = True
-    proficiency_level: Optional[str] = Field(None, regex="^(beginner|intermediate|advanced|expert)$")
+    proficiency_level: Optional[str] = Field(None, pattern="^(beginner|intermediate|advanced|expert)$")
     years_experience: Optional[int] = Field(None, ge=0, le=50)
 
 
@@ -45,6 +46,7 @@ class JobBase(BaseModel):
     is_hybrid: Optional[bool] = False
     
     # Employment details
+    contract_type: Optional[ContractType] = ContractType.PERMANENT
     job_type: Optional[JobType] = JobType.FULL_TIME
     experience_level: Optional[ExperienceLevel] = ExperienceLevel.MID_LEVEL
     
@@ -54,8 +56,8 @@ class JobBase(BaseModel):
     salary_currency: Optional[str] = Field("EUR", max_length=3)
     
     # Job posting details
-    deadline: Optional[date] = None
-    start_date: Optional[date] = None
+    deadline_date: Optional[date] = None
+    posting_date: Optional[date] = None
     
     # Additional details
     benefits: Optional[List[str]] = None
@@ -68,12 +70,12 @@ class JobBase(BaseModel):
     # Internal fields
     internal_notes: Optional[str] = None
 
-    @validator('salary_max')
-    def validate_salary_range(cls, v, values):
-        if v is not None and 'salary_min' in values and values['salary_min'] is not None:
-            if v < values['salary_min']:
+    @model_validator(mode='after')
+    def validate_salary_range(self):
+        if self.salary_max is not None and self.salary_min is not None:
+            if self.salary_max < self.salary_min:
                 raise ValueError('salary_max must be greater than or equal to salary_min')
-        return v
+        return self
 
 
 class JobCreate(JobBase):
@@ -134,8 +136,8 @@ class JobSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|updated_at|title|salary_min|application_count)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|updated_at|title|salary_min|application_count)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class JobListResponse(BaseModel):

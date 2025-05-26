@@ -72,7 +72,7 @@ class EmailGenerationRequest(BaseModel):
     template_id: Optional[UUID] = Field(None, description="Use existing template")
     template_type: Optional[str] = Field(None, description="Type of email to generate")
     context: Dict[str, Any] = Field(..., description="Variables for template")
-    tone: Optional[str] = Field("professional", regex="^(professional|casual|formal)$")
+    tone: Optional[str] = Field("professional", pattern="^(professional|casual|formal)$")
     language: Optional[str] = Field("en", max_length=5)
 
     class Config:
@@ -107,8 +107,8 @@ class InterviewQuestionsRequest(BaseModel):
 
 class InterviewQuestion(BaseModel):
     question: str
-    question_type: str = Field(..., regex="^(technical|behavioral|situational|cultural)$")
-    difficulty: str = Field(..., regex="^(easy|medium|hard)$")
+    question_type: str = Field(..., pattern="^(technical|behavioral|situational|cultural)$")
+    difficulty: str = Field(..., pattern="^(easy|medium|hard)$")
     purpose: str
     evaluation_guidance: str
     expected_time_minutes: Optional[int] = Field(None, ge=1, le=30)
@@ -138,7 +138,7 @@ class JobDescriptionRequest(BaseModel):
     location: Optional[str] = None
     is_remote: Optional[bool] = False
     salary_range: Optional[Dict[str, float]] = None
-    tone: Optional[str] = Field("professional", regex="^(professional|casual|startup|corporate)$")
+    tone: Optional[str] = Field("professional", pattern="^(professional|casual|startup|corporate)$")
 
     class Config:
         from_attributes = True
@@ -167,7 +167,7 @@ class JobDescriptionResponse(BaseModel):
 class CandidateFeedbackRequest(BaseModel):
     candidate_id: UUID
     application_id: Optional[UUID] = None
-    feedback_type: str = Field(..., regex="^(interview|rejection|general|improvement)$")
+    feedback_type: str = Field(..., pattern="^(interview|rejection|general|improvement)$")
     specific_areas: Optional[List[str]] = None
     include_recommendations: bool = True
 
@@ -190,7 +190,7 @@ class CandidateFeedbackResponse(BaseModel):
 # Skills Extraction Schemas  
 class SkillsExtractionRequest(BaseModel):
     text: str = Field(..., description="Text to extract skills from")
-    context_type: str = Field("cv", regex="^(cv|job_description|profile)$")
+    context_type: str = Field("cv", pattern="^(cv|job_description|profile)$")
     include_soft_skills: bool = True
     include_technical_skills: bool = True
     match_to_database: bool = True

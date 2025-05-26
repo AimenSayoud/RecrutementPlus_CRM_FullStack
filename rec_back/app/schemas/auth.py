@@ -1,7 +1,8 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
-from app.models.enums import UserRole, OfficeId
+from uuid import UUID
+from app.models.enums import UserRole
 
 # Request schemas
 class LoginRequest(BaseModel):
@@ -14,21 +15,28 @@ class RefreshTokenRequest(BaseModel):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
-    name: str
-    role: Optional[UserRole] = UserRole.EMPLOYEE
-    office_id: Optional[OfficeId] = OfficeId.OFFICE_1
+    first_name: str
+    last_name: str
+    role: Optional[UserRole] = UserRole.CANDIDATE
+    phone: Optional[str] = None
 
 # Response schemas
 class UserResponse(BaseModel):
-    id: str
+    id: UUID
     email: str
-    name: str
+    first_name: str
+    last_name: str
     role: UserRole
-    office_id: OfficeId
     is_active: bool
     is_verified: bool
+    phone: Optional[str] = None
     created_at: datetime
-    last_login: Optional[datetime]
+    last_login: Optional[datetime] = None
+    
+    # Computed field for backwards compatibility
+    @property
+    def name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
 
     class Config:
         from_attributes = True

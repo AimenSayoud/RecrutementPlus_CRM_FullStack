@@ -27,6 +27,7 @@ class Job(BaseModel):
     # Remote work
     remote_option = Column(Boolean, default=False, nullable=False)  # Kept for backward compatibility
     is_remote = Column(Boolean, default=False, nullable=False)  # Alias for CRUD compatibility
+    is_hybrid = Column(Boolean, default=False, nullable=False)  # Hybrid work arrangement
     
     # Salary
     salary_min = Column(Integer, nullable=True)
@@ -37,6 +38,12 @@ class Job(BaseModel):
     status = Column(SQLEnum(JobStatus), default=JobStatus.DRAFT, nullable=False)
     posting_date = Column(Date, nullable=True)
     deadline_date = Column(Date, nullable=True)
+    
+    # Additional details
+    benefits = Column(JSONB, nullable=True)  # Array of benefits
+    company_culture = Column(Text, nullable=True)
+    requires_cover_letter = Column(Boolean, default=False, nullable=False)
+    internal_notes = Column(Text, nullable=True)
     
     # Visibility and metrics
     is_featured = Column(Boolean, default=False, nullable=False)

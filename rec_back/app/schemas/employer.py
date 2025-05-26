@@ -23,7 +23,7 @@ class CompanyBase(BaseModel):
     postal_code: Optional[str] = Field(None, max_length=20)
     
     # Company details
-    company_size: Optional[str] = Field(None, regex="^(startup|small|medium|large|enterprise)$")
+    company_size: Optional[str] = Field(None, pattern="^(startup|small|medium|large|enterprise)$")
     founded_year: Optional[int] = Field(None, ge=1800, le=2030)
     
     # Business information
@@ -161,7 +161,7 @@ class EmployerProfileBase(BaseModel):
     hiring_budget_currency: Optional[str] = Field("EUR", max_length=3)
     
     # Preferences
-    preferred_communication: Optional[str] = Field("email", regex="^(email|phone|both)$")
+    preferred_communication: Optional[str] = Field("email", pattern="^(email|phone|both)$")
     notification_settings: Optional[Dict[str, Any]] = None
     
     # Additional information
@@ -220,9 +220,11 @@ class EmployerFullProfile(BaseModel):
 # Search and filter schemas
 class CompanySearchFilters(BaseModel):
     query: Optional[str] = Field(None, description="General search query")
+    name: Optional[str] = Field(None, description="Company name search")
     industry: Optional[str] = Field(None, description="Industry filter")
     company_size: Optional[str] = Field(None, description="Company size filter")
     location: Optional[str] = Field(None, description="Location filter")
+    is_active: Optional[bool] = Field(None, description="Active companies only")
     is_verified: Optional[bool] = Field(None, description="Verified companies only")
     is_premium: Optional[bool] = Field(None, description="Premium companies only")
     founded_after: Optional[int] = Field(None, description="Founded after year")
@@ -233,8 +235,8 @@ class CompanySearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|updated_at|name|active_jobs)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|updated_at|name|active_jobs)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class EmployerSearchFilters(BaseModel):
@@ -249,8 +251,8 @@ class EmployerSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|updated_at|jobs_posted|successful_hires)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|updated_at|jobs_posted|successful_hires)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class CompanyListResponse(BaseModel):

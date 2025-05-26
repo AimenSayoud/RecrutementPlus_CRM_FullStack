@@ -197,7 +197,7 @@ class AdminNotificationBase(BaseModel):
     title: str = Field(..., max_length=200)
     message: str = Field(..., min_length=1)
     notification_type: str = Field(..., max_length=50)
-    priority: Optional[str] = Field("medium", regex="^(low|medium|high|critical)$")
+    priority: Optional[str] = Field("medium", pattern="^(low|medium|high|critical)$")
     action_required: Optional[bool] = False
     action_url: Optional[str] = Field(None, max_length=500)
     action_data: Optional[Dict[str, Any]] = None
@@ -240,8 +240,8 @@ class AdminSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|last_login|admin_level|user_name)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|last_login|admin_level|user_name)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class AuditLogSearchFilters(BaseModel):
@@ -257,8 +257,8 @@ class AuditLogSearchFilters(BaseModel):
     page_size: int = Field(50, ge=1, le=200)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|action_type|status)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|action_type|status)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class SystemConfigSearchFilters(BaseModel):
@@ -272,8 +272,8 @@ class SystemConfigSearchFilters(BaseModel):
     page_size: int = Field(50, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("config_key", regex="^(config_key|category|last_modified_at)$")
-    sort_order: Optional[str] = Field("asc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("config_key", pattern="^(config_key|category|last_modified_at)$")
+    sort_order: Optional[str] = Field("asc", pattern="^(asc|desc)$")
 
 
 # Response schemas

@@ -389,7 +389,7 @@ class CRUDCompanyHiringPreferences(CRUDBase[CompanyHiringPreferences, CompanyHir
         existing = self.get_by_company(db, company_id=company_id)
         
         if existing:
-            update_data = obj_in.dict(exclude_unset=True)
+            update_data = obj_in.model_dump(exclude_unset=True)
             for field, value in update_data.items():
                 setattr(existing, field, value)
             db.commit()
@@ -398,7 +398,7 @@ class CRUDCompanyHiringPreferences(CRUDBase[CompanyHiringPreferences, CompanyHir
         else:
             create_data = CompanyHiringPreferencesCreate(
                 company_id=company_id,
-                **obj_in.dict(exclude_unset=True)
+                **obj_in.model_dump(exclude_unset=True)
             )
             return self.create(db, obj_in=create_data)
 

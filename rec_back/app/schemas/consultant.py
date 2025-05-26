@@ -42,7 +42,7 @@ class ConsultantProfile(ConsultantProfileBase):
 # Consultant Target schemas
 class ConsultantTargetBase(BaseModel):
     consultant_id: UUID
-    target_type: str = Field(..., regex="^(monthly|quarterly|yearly)$")
+    target_type: str = Field(..., pattern="^(monthly|quarterly|yearly)$")
     target_value: Decimal = Field(..., ge=0)
     target_period: str
     achieved_value: Optional[Decimal] = Field(0, ge=0)
@@ -54,7 +54,7 @@ class ConsultantTargetCreate(ConsultantTargetBase):
 
 class ConsultantTargetUpdate(ConsultantTargetBase):
     consultant_id: Optional[UUID] = None
-    target_type: Optional[str] = Field(None, regex="^(monthly|quarterly|yearly)$")
+    target_type: Optional[str] = Field(None, pattern="^(monthly|quarterly|yearly)$")
     target_value: Optional[Decimal] = Field(None, ge=0)
     target_period: Optional[str] = None
 
@@ -77,7 +77,7 @@ class ConsultantPerformanceReviewBase(BaseModel):
     strengths: Optional[str] = None
     areas_for_improvement: Optional[str] = None
     goals_next_period: Optional[str] = None
-    overall_rating: Optional[str] = Field(None, regex="^(excellent|good|satisfactory|needs_improvement|unsatisfactory)$")
+    overall_rating: Optional[str] = Field(None, pattern="^(excellent|good|satisfactory|needs_improvement|unsatisfactory)$")
 
 
 class ConsultantPerformanceReviewCreate(ConsultantPerformanceReviewBase):
@@ -178,8 +178,8 @@ class ConsultantSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|updated_at|experience_years|total_placements)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|updated_at|experience_years|total_placements)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class ConsultantListResponse(BaseModel):

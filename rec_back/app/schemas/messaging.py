@@ -196,8 +196,8 @@ class ConversationSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("last_activity_at", regex="^(last_activity_at|created_at|title)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("last_activity_at", pattern="^(last_activity_at|created_at|title)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class MessageSearchFilters(BaseModel):
@@ -215,8 +215,8 @@ class MessageSearchFilters(BaseModel):
     page_size: int = Field(50, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|sent_at)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|sent_at)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class EmailTemplateSearchFilters(BaseModel):
@@ -232,8 +232,8 @@ class EmailTemplateSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("name", regex="^(name|usage_count|created_at|last_used_at)$")
-    sort_order: Optional[str] = Field("asc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("name", pattern="^(name|usage_count|created_at|last_used_at)$")
+    sort_order: Optional[str] = Field("asc", pattern="^(asc|desc)$")
 
 
 # Response schemas

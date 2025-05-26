@@ -157,7 +157,7 @@ class CRUDEducation(CRUDBase[CandidateEducation, EducationCreate, EducationUpdat
     
     def create_for_candidate(self, db: Session, *, obj_in: EducationCreate) -> CandidateEducation:
         """Create education record for candidate"""
-        db_obj = CandidateEducation(**obj_in.dict())
+        db_obj = CandidateEducation(**obj_in.model_dump())
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)
@@ -182,7 +182,7 @@ class CRUDWorkExperience(CRUDBase[CandidateExperience, WorkExperienceCreate, Wor
     
     def create_for_candidate(self, db: Session, *, obj_in: WorkExperienceCreate) -> CandidateExperience:
         """Create work experience record for candidate"""
-        db_obj = CandidateExperience(**obj_in.dict())
+        db_obj = CandidateExperience(**obj_in.model_dump())
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)
@@ -228,7 +228,7 @@ class CRUDCandidateJobPreference(CRUDBase[CandidatePreferences, CandidateJobPref
         existing = self.get_by_candidate(db, candidate_id=candidate_id)
         
         if existing:
-            update_data = obj_in.dict(exclude_unset=True)
+            update_data = obj_in.model_dump(exclude_unset=True)
             for field, value in update_data.items():
                 setattr(existing, field, value)
             db.commit()
@@ -237,7 +237,7 @@ class CRUDCandidateJobPreference(CRUDBase[CandidatePreferences, CandidateJobPref
         else:
             create_data = CandidateJobPreferenceCreate(
                 candidate_id=candidate_id,
-                **obj_in.dict(exclude_unset=True)
+                **obj_in.model_dump(exclude_unset=True)
             )
             return self.create(db, obj_in=create_data)
 
@@ -260,7 +260,7 @@ class CRUDCandidateNotificationSettings(CRUDBase[CandidateNotificationSettings, 
         existing = self.get_by_candidate(db, candidate_id=candidate_id)
         
         if existing:
-            update_data = obj_in.dict(exclude_unset=True)
+            update_data = obj_in.model_dump(exclude_unset=True)
             for field, value in update_data.items():
                 setattr(existing, field, value)
             db.commit()
@@ -269,7 +269,7 @@ class CRUDCandidateNotificationSettings(CRUDBase[CandidateNotificationSettings, 
         else:
             create_data = CandidateNotificationSettingsCreate(
                 candidate_id=candidate_id,
-                **obj_in.dict(exclude_unset=True)
+                **obj_in.model_dump(exclude_unset=True)
             )
             return self.create(db, obj_in=create_data)
     

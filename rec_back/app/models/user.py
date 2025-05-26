@@ -30,8 +30,7 @@ class User(BaseModel):
     # Messages sent
     sent_messages = relationship("Message", back_populates="sender", foreign_keys="Message.sender_id")
     
-    # Applications submitted by candidates
-    applications = relationship("Application", back_populates="candidate", foreign_keys="Application.candidate_id")
+    # Remove the problematic applications relationship - applications are accessed through candidate_profile
 
     @property
     def full_name(self):

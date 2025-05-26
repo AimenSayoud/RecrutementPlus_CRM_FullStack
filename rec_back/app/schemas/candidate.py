@@ -1,7 +1,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 from decimal import Decimal
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, field_validator, EmailStr, Field, validator
 from uuid import UUID
 
 
@@ -63,7 +63,7 @@ class CandidateNotificationSettings(CandidateNotificationSettingsBase):
 # Candidate Skill schemas
 class CandidateSkillBase(BaseModel):
     skill_id: UUID
-    proficiency_level: Optional[str] = Field(None, regex="^(beginner|intermediate|advanced|expert)$")
+    proficiency_level: Optional[str] = Field(None, pattern="^(beginner|intermediate|advanced|expert)$")
     years_experience: Optional[int] = Field(None, ge=0, le=50)
 
 
@@ -184,13 +184,13 @@ class CandidateProfileBase(BaseModel):
     publications: Optional[List[Dict[str, Any]]] = None
     
     # Visibility and settings
-    profile_visibility: Optional[str] = Field("public", regex="^(public|private|semi_private)$")
+    profile_visibility: Optional[str] = Field("public", pattern="^(public|private|semi_private)$")
     is_open_to_opportunities: Optional[bool] = True
     
     # Notes
     notes: Optional[str] = None
 
-    @validator('cv_urls')
+    @field_validator('cv_urls')
     def validate_cv_urls(cls, v):
         if v is not None and len(v) > 5:
             raise ValueError('Maximum 5 CV files allowed')
@@ -251,7 +251,7 @@ class CandidateSearchFilters(BaseModel):
     locations: Optional[List[str]] = Field(None, description="Preferred locations")
     industries: Optional[List[str]] = Field(None, description="Industry experience")
     education_level: Optional[str] = Field(None, description="Minimum education level")
-    availability: Optional[str] = Field(None, regex="^(immediate|1_week|2_weeks|1_month|3_months)$")
+    availability: Optional[str] = Field(None, pattern="^(immediate|1_week|2_weeks|1_month|3_months)$")
     remote_only: Optional[bool] = Field(None, description="Remote work only")
     salary_min: Optional[Decimal] = Field(None, ge=0, description="Minimum salary expectation")
     salary_max: Optional[Decimal] = Field(None, ge=0, description="Maximum salary expectation")
@@ -261,8 +261,8 @@ class CandidateSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", regex="^(created_at|updated_at|experience|relevance)$")
-    sort_order: Optional[str] = Field("desc", regex="^(asc|desc)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|updated_at|experience|relevance)$")
+    sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 
 class CandidateListResponse(BaseModel):

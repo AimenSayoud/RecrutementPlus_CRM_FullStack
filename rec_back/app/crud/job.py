@@ -203,7 +203,7 @@ class CRUDJobSkillRequirement(CRUDBase[JobSkillRequirement, JobSkillRequirementC
         """Create multiple skill requirements for a job"""
         db_objs = []
         for req in skill_requirements:
-            req_data = req.dict()
+            req_data = req.model_dump()
             req_data['job_id'] = job_id
             db_obj = JobSkillRequirement(**req_data)
             db.add(db_obj)

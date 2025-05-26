@@ -5,7 +5,7 @@ from .job import job_service, JobService
 from .application import application_service, ApplicationService
 from .company import company_service, CompanyService
 from .consultant import consultant_service, ConsultantService
-from .notification import notification_service, NotificationService, NotificationType, NotificationChannel
+from .notification import notification_service, NotificationService
 from .analytics import analytics_service, AnalyticsService
 
 __all__ = [
@@ -39,8 +39,6 @@ __all__ = [
     # Notification
     "notification_service",
     "NotificationService",
-    "NotificationType",
-    "NotificationChannel",
     
     # Analytics
     "analytics_service",
