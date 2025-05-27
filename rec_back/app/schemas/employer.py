@@ -23,7 +23,7 @@ class CompanyBase(BaseModel):
     postal_code: Optional[str] = Field(None, max_length=20)
     
     # Company details
-    company_size: Optional[str] = Field(None, pattern="^(startup|small|medium|large|enterprise)$")
+    company_size: Optional[str] = Field(None, pattern="^(1-10|10-50|50-200|200-1000|1000\+)$")
     founded_year: Optional[int] = Field(None, ge=1800, le=2030)
     
     # Business information

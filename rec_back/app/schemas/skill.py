@@ -8,9 +8,7 @@ from uuid import UUID
 class SkillCategoryBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: Optional[str] = None
-    color: Optional[str] = Field(None, max_length=7)  # Hex color code
-    icon: Optional[str] = Field(None, max_length=50)
-    is_active: Optional[bool] = True
+    display_order: Optional[int] = Field(0, ge=0)
 
 
 class SkillCategoryCreate(SkillCategoryBase):
@@ -23,7 +21,6 @@ class SkillCategoryUpdate(SkillCategoryBase):
 
 class SkillCategory(SkillCategoryBase):
     id: UUID
-    skill_count: Optional[int] = 0
     created_at: datetime
     updated_at: datetime
 

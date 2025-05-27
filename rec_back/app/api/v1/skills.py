@@ -103,6 +103,37 @@ async def create_skill(
             detail=f"Error creating skill: {str(e)}"
         )
 
+@router.get("/categories", response_model=SkillCategoryListResponse)
+async def list_skill_categories(
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_database)
+):
+    """
+    List skill categories.
+    Public endpoint with optional filtering.
+    """
+    try:
+        categories, total = skill_service.get_skill_categories_with_search(
+            db,
+            query=filters.q,
+            is_active=is_active,
+            skip=pagination.offset,
+            limit=pagination.page_size
+        )
+        
+        return SkillCategoryListResponse(
+            categories=categories,
+            total=total
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving skill categories: {str(e)}"
+        )
+
 @router.get("/{skill_id}", response_model=SkillWithCategory)
 async def get_skill(
     skill_id: UUID = Path(..., description="Skill ID"),

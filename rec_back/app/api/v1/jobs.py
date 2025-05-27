@@ -11,7 +11,7 @@ from app.api.v1.deps import (
 from app.services.job import job_service
 from app.schemas.job import (
     JobBase, JobCreate, JobUpdate, Job, JobWithDetails,
-    JobSkillRequirementCreate, JobSkillRequirementUpdate, JobSkillRequirement,
+    JobSkillRequirementBase, JobSkillRequirementCreate, JobSkillRequirementUpdate, JobSkillRequirement,
     JobSearchFilters, JobListResponse, JobApplicationSummary
 )
 from app.models.user import User
@@ -28,8 +28,8 @@ async def search_jobs(
     location: Optional[str] = Query(None, description="Location"),
     remote_only: Optional[bool] = Query(False, description="Remote jobs only"),
     experience_level: Optional[ExperienceLevel] = Query(None, description="Experience level"),
-    salary_min: Optional[int] = Query(None, description="Minimum salary"),
-    salary_max: Optional[int] = Query(None, description="Maximum salary"),
+    salary_min: Optional[float] = Query(None, description="Minimum salary"),
+    salary_max: Optional[float] = Query(None, description="Maximum salary"),
     pagination: PaginationParams = Depends(get_pagination_params),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_database)
@@ -43,7 +43,7 @@ async def search_jobs(
             query=q,
             skills=skills,
             location=location,
-            remote_only=remote_only,
+            is_remote=remote_only,
             experience_level=experience_level,
             salary_min=salary_min,
             salary_max=salary_max,
@@ -54,7 +54,7 @@ async def search_jobs(
             sort_order="desc"
         )
         
-        jobs, total = job_service.search_jobs_advanced(db, filters=search_filters)
+        jobs, total = job_service.get_jobs_with_search(db, filters=search_filters)
         
         return JobListResponse(
             jobs=jobs,
@@ -79,8 +79,8 @@ async def list_jobs(
     location: Optional[str] = Query(None, description="Filter by location"),
     experience_level: Optional[ExperienceLevel] = Query(None, description="Filter by experience level"),
     remote_only: Optional[bool] = Query(None, description="Show only remote jobs"),
-    salary_min: Optional[int] = Query(None, description="Minimum salary filter"),
-    salary_max: Optional[int] = Query(None, description="Maximum salary filter"),
+    salary_min: Optional[float] = Query(None, description="Minimum salary filter"),
+    salary_max: Optional[float] = Query(None, description="Maximum salary filter"),
     
     # Pagination and common filters
     pagination: PaginationParams = Depends(get_pagination_params),
@@ -102,7 +102,7 @@ async def list_jobs(
             company_id=company_id,
             location=location,
             experience_level=experience_level,
-            remote_only=remote_only,
+            is_remote=remote_only,
             salary_min=salary_min,
             salary_max=salary_max,
             page=pagination.page,
@@ -376,7 +376,7 @@ async def get_job_applications(
 
 @router.post("/{job_id}/skills", response_model=JobSkillRequirement)
 async def add_job_skill_requirement(
-    skill_data: JobSkillRequirementCreate,
+    skill_data: JobSkillRequirementBase,
     job_id: UUID = Path(..., description="Job ID"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_database)
@@ -399,15 +399,26 @@ async def add_job_skill_requirement(
                 detail="Insufficient permissions to modify job requirements"
             )
         
+        # Create JobSkillRequirementCreate with job_id from path
+        skill_requirement_create = JobSkillRequirementCreate(
+            job_id=job_id,
+            **skill_data.model_dump()
+        )
+        
         skill_requirement = job_service.add_skill_requirement(
             db,
             job_id=job_id,
-            skill_data=skill_data
+            skill_data=skill_requirement_create
         )
         return skill_requirement
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        import traceback
+        print(f"Full error traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
             detail=f"Error adding skill requirement: {str(e)}"

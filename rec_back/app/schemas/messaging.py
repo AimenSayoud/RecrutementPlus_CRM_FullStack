@@ -196,7 +196,7 @@ class ConversationSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("last_activity_at", pattern="^(last_activity_at|created_at|title)$")
+    sort_by: Optional[str] = Field("last_activity_at", pattern="^(last_activity_at|last_message_at|created_at|title)$")
     sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 

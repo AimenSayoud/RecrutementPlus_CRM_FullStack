@@ -11,7 +11,7 @@ from app.models.enums import ContractType
 class JobSkillRequirementBase(BaseModel):
     skill_id: UUID
     is_required: Optional[bool] = True
-    proficiency_level: Optional[str] = Field(None, pattern="^(beginner|intermediate|advanced|expert)$")
+    proficiency_level: Optional[str] = Field(None, pattern="^(Beginner|Intermediate|Advanced|Expert)$")
     years_experience: Optional[int] = Field(None, ge=0, le=50)
 
 
@@ -136,7 +136,7 @@ class JobSearchFilters(BaseModel):
     page_size: int = Field(20, ge=1, le=100)
     
     # Sorting
-    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|updated_at|title|salary_min|application_count)$")
+    sort_by: Optional[str] = Field("created_at", pattern="^(created_at|updated_at|title|salary_min|application_count|relevance)$")
     sort_order: Optional[str] = Field("desc", pattern="^(asc|desc)$")
 
 

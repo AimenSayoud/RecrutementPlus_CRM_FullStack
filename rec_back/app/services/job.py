@@ -715,6 +715,64 @@ class JobService(BaseService[Job, CRUDJob]):
                 insights["your_position"] = "above_market"
         
         return insights
+    
+    def can_user_modify_job(self, db: Session, *, job_id: UUID, user_id: UUID) -> bool:
+        """Check if user can modify a job (employer can modify their company's jobs)"""
+        job = self.get(db, id=job_id)
+        if not job:
+            return False
+        
+        # Get user with employer profiles
+        from app.models.user import User
+        from sqlalchemy.orm import joinedload
+        
+        user = db.query(User).options(
+            joinedload(User.employer_profiles)
+        ).filter(User.id == user_id).first()
+        
+        if not user:
+            return False
+        
+        # Check if user has any employer profile belonging to the same company as the job
+        if user.employer_profiles:
+            for employer_profile in user.employer_profiles:
+                if employer_profile.company_id == job.company_id:
+                    return True
+        
+        return False
+    
+    def add_skill_requirement(
+        self, 
+        db: Session, 
+        *, 
+        job_id: UUID, 
+        skill_data: JobSkillRequirementCreate
+    ) -> JobSkillRequirement:
+        """Add a skill requirement to a job"""
+        # Verify the job exists
+        job = self.get(db, id=job_id)
+        if not job:
+            raise ValueError("Job not found")
+        
+        # Verify the skill exists
+        skill = db.query(Skill).filter(Skill.id == skill_data.skill_id).first()
+        if not skill:
+            raise ValueError("Skill not found")
+        
+        # Check if skill requirement already exists
+        existing = db.query(JobSkillRequirement).filter(
+            and_(
+                JobSkillRequirement.job_id == job_id,
+                JobSkillRequirement.skill_id == skill_data.skill_id
+            )
+        ).first()
+        
+        if existing:
+            raise ValueError("Skill requirement already exists for this job")
+        
+        # Create the skill requirement
+        skill_requirement = self.skill_requirement_crud.create(db, obj_in=skill_data)
+        return skill_requirement
 
 
 # Create service instance

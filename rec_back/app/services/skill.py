@@ -98,6 +98,31 @@ class SkillService(BaseService[Skill, CRUDSkill]):
         
         return skill
     
+    def create_skill_category(
+        self, 
+        db: Session, 
+        *, 
+        category_data: "SkillCategoryCreate",
+        created_by: UUID
+    ) -> "SkillCategory":
+        """Create a new skill category"""
+        # Check if category already exists
+        existing = self.category_crud.get_by_name(db, name=category_data.name)
+        if existing:
+            raise ValueError(f"Skill category '{category_data.name}' already exists")
+        
+        # Create category
+        category = self.category_crud.create(db, obj_in=category_data)
+        
+        # Log creation
+        self.log_action(
+            "skill_category_created",
+            user_id=created_by,
+            details={"category_name": category.name}
+        )
+        
+        return category
+    
     def merge_duplicate_skills(
         self, 
         db: Session, 
@@ -693,6 +718,24 @@ class SkillService(BaseService[Skill, CRUDSkill]):
                 "Certification options"
             ]
         }
+    
+    def get_skill_categories_with_search(
+        self, 
+        db: Session, 
+        *, 
+        query: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> Tuple[List[SkillCategory], int]:
+        """Get skill categories with search filters and pagination"""
+        return self.category_crud.get_multi_with_search(
+            db, 
+            query=query,
+            is_active=is_active,
+            skip=skip, 
+            limit=limit
+        )
 
 
 # Create service instance

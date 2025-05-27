@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, desc, asc, func
 from uuid import UUID
@@ -106,6 +106,42 @@ class CRUDSkillCategory(CRUDBase[SkillCategory, SkillCategoryCreate, SkillCatego
             "skill_count": skill_count or 0,
             "total_usage": total_usage or 0
         }
+    
+    def get_multi_with_search(
+        self, 
+        db: Session, 
+        *, 
+        query: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> Tuple[List[SkillCategory], int]:
+        """Get skill categories with search filters and pagination"""
+        db_query = db.query(SkillCategory)
+        
+        # Apply filters
+        if query:
+            search_term = f"%{query}%"
+            db_query = db_query.filter(
+                or_(
+                    SkillCategory.name.ilike(search_term),
+                    SkillCategory.description.ilike(search_term)
+                )
+            )
+        
+        if is_active is not None:
+            db_query = db_query.filter(SkillCategory.is_active == is_active)
+        
+        # Get total count
+        total = db_query.count()
+        
+        # Apply pagination and ordering
+        categories = db_query.order_by(asc(SkillCategory.name))\
+                           .offset(skip)\
+                           .limit(limit)\
+                           .all()
+        
+        return categories, total
 
 
 # Create CRUD instances

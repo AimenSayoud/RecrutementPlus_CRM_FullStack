@@ -63,7 +63,7 @@ class CandidateNotificationSettings(CandidateNotificationSettingsBase):
 # Candidate Skill schemas
 class CandidateSkillBase(BaseModel):
     skill_id: UUID
-    proficiency_level: Optional[str] = Field(None, pattern="^(beginner|intermediate|advanced|expert)$")
+    proficiency_level: Optional[str] = Field(None, pattern="^(Beginner|Intermediate|Advanced|Expert)$")
     years_experience: Optional[int] = Field(None, ge=0, le=50)
 
 

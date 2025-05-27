@@ -62,8 +62,8 @@ class AuthService:
         user = User(
             email=user_data.email,
             password_hash=hashed_password,
-            first_name=user_data.name.split()[0],
-            last_name=" ".join(user_data.name.split()[1:]) or "User",
+            first_name=user_data.first_name,
+            last_name=user_data.last_name,
             role=user_data.role or UserRole.CANDIDATE,
             is_active=True,
             is_verified=False

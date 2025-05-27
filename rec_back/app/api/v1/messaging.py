@@ -30,7 +30,6 @@ async def list_conversations(
     # Search and filtering
     conversation_type: Optional[ConversationType] = Query(None, description="Filter by conversation type"),
     is_archived: Optional[bool] = Query(None, description="Filter by archived status"),
-    has_unread: Optional[bool] = Query(None, description="Filter conversations with unread messages"),
     participant_id: Optional[UUID] = Query(None, description="Filter by participant ID"),
     
     # Pagination and common filters
@@ -49,9 +48,8 @@ async def list_conversations(
         # Build search filters
         search_filters = ConversationSearchFilters(
             participant_id=current_user.id,  # Always filter by current user
-            conversation_type=conversation_type,
+            type=conversation_type,
             is_archived=is_archived,
-            has_unread=has_unread,
             query=filters.q,
             page=pagination.page,
             page_size=pagination.page_size,
@@ -64,11 +62,11 @@ async def list_conversations(
         )
         
         return ConversationListResponse(
-            items=conversations,
+            conversations=conversations,
             total=total,
             page=pagination.page,
             page_size=pagination.page_size,
-            pages=(total + pagination.page_size - 1) // pagination.page_size
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
         )
     except Exception as e:
         raise HTTPException(
@@ -258,11 +256,11 @@ async def get_conversation_messages(
         )
         
         return MessageListResponse(
-            items=messages,
+            messages=messages,
             total=total,
             page=pagination.page,
             page_size=pagination.page_size,
-            pages=(total + pagination.page_size - 1) // pagination.page_size
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
         )
     except Exception as e:
         raise HTTPException(
@@ -492,11 +490,11 @@ async def list_email_templates(
         )
         
         return EmailTemplateListResponse(
-            items=templates,
+            templates=templates,
             total=total,
             page=pagination.page,
             page_size=pagination.page_size,
-            pages=(total + pagination.page_size - 1) // pagination.page_size
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
         )
     except Exception as e:
         raise HTTPException(

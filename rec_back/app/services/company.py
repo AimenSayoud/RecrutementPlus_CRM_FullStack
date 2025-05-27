@@ -14,7 +14,8 @@ from app.models.application import Application
 from app.models.user import User
 from app.schemas.employer import (
     CompanyCreate, CompanyUpdate, EmployerProfileCreate,
-    CompanySearchFilters, CompanyContactCreate
+    CompanySearchFilters, CompanyContactCreate, CompanyContactUpdate,
+    CompanyHiringPreferences, CompanyHiringPreferencesUpdate
 )
 from app.crud import employer as employer_crud
 from app.services.base import BaseService
@@ -29,6 +30,84 @@ class CompanyService(BaseService[Company, employer_crud.CRUDCompany]):
         self.contact_crud = employer_crud.company_contact
         self.preferences_crud = employer_crud.company_hiring_preferences
         self.history_crud = employer_crud.recruitment_history
+    
+    def create_company(
+        self, 
+        db: Session, 
+        *, 
+        company_data: CompanyCreate,
+        created_by: UUID
+    ) -> Company:
+        """Create a new company"""
+        # Create the company using base CRUD
+        company = self.crud.create(db, obj_in=company_data)
+        
+        # Log company creation
+        self.log_action(
+            "company_created",
+            user_id=created_by,
+            details={"company_id": str(company.id), "company_name": company.name}
+        )
+        
+        return company
+    
+    def update_company(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        update_data: CompanyUpdate,
+        updated_by: UUID
+    ) -> Optional[Company]:
+        """Update company information"""
+        company = self.get(db, id=company_id)
+        if not company:
+            return None
+        
+        # Update using base CRUD
+        updated_company = self.crud.update(db, db_obj=company, obj_in=update_data)
+        
+        # Log company update
+        self.log_action(
+            "company_updated",
+            user_id=updated_by,
+            details={"company_id": str(company_id), "company_name": company.name}
+        )
+        
+        return updated_company
+    
+    def delete_company(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        deleted_by: UUID
+    ) -> bool:
+        """Delete a company"""
+        company = self.get(db, id=company_id)
+        if not company:
+            return False
+        
+        # Delete using base CRUD
+        self.crud.remove(db, id=company_id)
+        
+        # Log company deletion
+        self.log_action(
+            "company_deleted",
+            user_id=deleted_by,
+            details={"company_id": str(company_id), "company_name": company.name}
+        )
+        
+        return True
+    
+    def get_company_with_details(
+        self, 
+        db: Session, 
+        *, 
+        id: UUID
+    ) -> Optional[Company]:
+        """Get company with all related details"""
+        return self.crud.get_with_details(db, id=id)
     
     def get_companies_with_search(
         self, 
@@ -555,6 +634,192 @@ class CompanyService(BaseService[Company, employer_crud.CRUDCompany]):
             trends[month_key] = count
         
         return trends
+    
+    def get_company_employees(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        skip: int = 0,
+        limit: int = 50
+    ):
+        """Get company employees/employer profiles"""
+        return self.employer_crud.get_by_company(
+            db, company_id=company_id, skip=skip, limit=limit
+        )
+    
+    def get_company_contacts(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID
+    ):
+        """Get company contacts"""
+        return self.contact_crud.get_by_company(db, company_id=company_id)
+    
+    def add_company_contact(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        contact_data: CompanyContactCreate,
+        created_by: UUID
+    ):
+        """Add a new company contact"""
+        # Create new contact data with company_id
+        contact_create = CompanyContactCreate(
+            company_id=company_id,
+            **contact_data.model_dump()
+        )
+        contact = self.contact_crud.create(db, obj_in=contact_create)
+        
+        # Log contact creation
+        self.log_action(
+            "company_contact_added",
+            user_id=created_by,
+            details={"company_id": str(company_id), "contact_name": contact.name}
+        )
+        
+        return contact
+    
+    def update_company_contact(
+        self, 
+        db: Session, 
+        *, 
+        contact_id: UUID,
+        update_data: CompanyContactUpdate,
+        updated_by: UUID
+    ):
+        """Update a company contact"""
+        contact = self.contact_crud.get(db, id=contact_id)
+        if not contact:
+            return None
+        
+        updated_contact = self.contact_crud.update(db, db_obj=contact, obj_in=update_data)
+        
+        # Log contact update
+        self.log_action(
+            "company_contact_updated",
+            user_id=updated_by,
+            details={"contact_id": str(contact_id), "contact_name": contact.name}
+        )
+        
+        return updated_contact
+    
+    def delete_company_contact(
+        self, 
+        db: Session, 
+        *, 
+        contact_id: UUID,
+        deleted_by: UUID
+    ) -> bool:
+        """Delete a company contact"""
+        contact = self.contact_crud.get(db, id=contact_id)
+        if not contact:
+            return False
+        
+        self.contact_crud.remove(db, id=contact_id)
+        
+        # Log contact deletion
+        self.log_action(
+            "company_contact_deleted",
+            user_id=deleted_by,
+            details={"contact_id": str(contact_id), "contact_name": contact.name}
+        )
+        
+        return True
+    
+    def get_hiring_preferences(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID
+    ):
+        """Get company hiring preferences"""
+        return self.preferences_crud.get_by_company(db, company_id=company_id)
+    
+    def update_hiring_preferences(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        update_data: CompanyHiringPreferencesUpdate,
+        updated_by: UUID
+    ):
+        """Update company hiring preferences"""
+        preferences = self.preferences_crud.create_or_update(
+            db, company_id=company_id, obj_in=update_data
+        )
+        
+        # Log preferences update
+        self.log_action(
+            "company_preferences_updated",
+            user_id=updated_by,
+            details={"company_id": str(company_id)}
+        )
+        
+        return preferences
+    
+    def is_company_member(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        user_id: UUID
+    ) -> bool:
+        """Check if user is a member of the company"""
+        employer_profiles = self.employer_crud.get_by_user_id(db, user_id=user_id)
+        return any(ep.company_id == company_id for ep in employer_profiles)
+    
+    def get_company_analytics(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get company analytics and statistics"""
+        # For now, return the same as dashboard stats
+        # You can extend this to include date-filtered analytics
+        return self.get_company_dashboard_stats(db, company_id=company_id)
+    
+    def get_company_jobs(
+        self, 
+        db: Session, 
+        *, 
+        company_id: UUID,
+        status: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> Tuple[List, int]:
+        """Get all jobs posted by a company with optional filtering"""
+        from app.models.job import Job
+        from sqlalchemy import and_
+        
+        # Build query
+        query = db.query(Job).filter(Job.company_id == company_id)
+        
+        # Apply status filter if provided
+        if status:
+            from app.models.enums import JobStatus
+            try:
+                job_status = JobStatus(status.upper())
+                query = query.filter(Job.status == job_status)
+            except ValueError:
+                # Invalid status, return empty results
+                return [], 0
+        
+        # Get total count
+        total = query.count()
+        
+        # Apply pagination and ordering
+        jobs = query.order_by(Job.created_at.desc())\
+                   .offset(skip)\
+                   .limit(limit)\
+                   .all()
+        
+        return jobs, total
 
 
 # Create service instance

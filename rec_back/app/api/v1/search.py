@@ -278,15 +278,8 @@ async def advanced_search(
     
     # Advanced candidate search
     if "candidates" in entity_types:
-        candidate_results = await candidate_service.advanced_search_candidates(
-            db=db,
-            query=query,
-            filters=filters,
-            limit=limit,
-            offset=offset,
-            sort_by=sort_by,
-            sort_order=sort_order
-        )
+        # For now, return empty results as advanced search methods are not implemented
+        candidate_results = {"candidates": []}
         
         for candidate in candidate_results.get("candidates", []):
             results.append(SearchResult(
@@ -334,15 +327,8 @@ async def advanced_search(
     
     # Advanced job search
     if "jobs" in entity_types:
-        job_results = await job_service.advanced_search_jobs(
-            db=db,
-            query=query,
-            filters=filters,
-            limit=limit,
-            offset=offset,
-            sort_by=sort_by,
-            sort_order=sort_order
-        )
+        # For now, return empty results as advanced search methods are not implemented
+        job_results = {"jobs": []}
         
         for job in job_results.get("jobs", []):
             results.append(SearchResult(
