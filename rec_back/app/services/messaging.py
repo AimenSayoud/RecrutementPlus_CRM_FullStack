@@ -1,18 +1,20 @@
 # app/services/messaging.py
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_, func, desc
 from uuid import UUID
 from datetime import datetime, timedelta
 
 from app.models.messaging import (
     Conversation, Message, MessageAttachment, MessageReadReceipt,
-    MessageReaction, EmailTemplate, ConversationType, MessageType, MessageStatus
+     EmailTemplate, ConversationType, MessageType, MessageStatus,
+    conversation_participants
 )
 from app.models.user import User
 from app.schemas.messaging import (
     ConversationCreate, MessageCreate, SendMessageRequest,
-    CreateConversationRequest, EmailTemplateCreate
+    CreateConversationRequest, EmailTemplateCreate,
+    ConversationSearchFilters, MessageSearchFilters, EmailTemplateSearchFilters
 )
 from app.crud import messaging as messaging_crud
 from app.services.base import BaseService
@@ -43,23 +45,29 @@ class MessagingService(BaseService[Conversation, messaging_crud.CRUDConversation
         if len(participants) != len(request.participant_ids) + 1:
             raise ValueError("One or more participants not found")
         
-        # Create conversation
-        conversation = self.crud.create_direct_conversation(
-            db,
-            user1_id=created_by,
-            user2_id=request.participant_ids[0] if len(request.participant_ids) == 1 else None,
-            title=request.title
+        # Create conversation directly
+        conversation = Conversation(
+            title=request.title,
+            type=request.type,
+            created_by_id=created_by,
+            last_activity_at=datetime.utcnow()
         )
+        db.add(conversation)
+        db.flush()  # Get the ID
         
-        # Add additional participants for group conversations
-        if len(request.participant_ids) > 1:
-            conversation.type = ConversationType.GROUP
-            for participant_id in request.participant_ids[1:]:
-                self.crud.add_participant(
-                    db, 
-                    conversation_id=conversation.id,
-                    user_id=participant_id
-                )
+        # Add participants
+        participant_data = [
+            {"conversation_id": conversation.id, "user_id": created_by, "joined_at": datetime.utcnow()}
+        ]
+        for participant_id in request.participant_ids:
+            if participant_id != created_by:  # Don't add creator twice
+                participant_data.append({
+                    "conversation_id": conversation.id, 
+                    "user_id": participant_id, 
+                    "joined_at": datetime.utcnow()
+                })
+        
+        db.execute(conversation_participants.insert().values(participant_data))
         
         # Send initial message if provided
         if request.initial_message:
@@ -72,6 +80,236 @@ class MessagingService(BaseService[Conversation, messaging_crud.CRUDConversation
         
         db.commit()
         return conversation
+    
+    def get_conversations_with_search(
+        self, 
+        db: Session, 
+        *, 
+        filters: ConversationSearchFilters
+    ) -> Tuple[List[Conversation], int]:
+        """Get conversations with search filters and pagination"""
+        # Get user's conversations        
+        query = db.query(Conversation).join(
+            conversation_participants,
+            conversation_participants.c.conversation_id == Conversation.id
+        ).filter(
+            conversation_participants.c.user_id == filters.participant_id
+        )
+        
+        # Apply filters
+        if filters.type:
+            query = query.filter(Conversation.type == filters.type)
+        
+        if filters.is_archived is not None:
+            query = query.filter(Conversation.is_archived == filters.is_archived)
+        
+        if filters.query:
+            search_term = f"%{filters.query}%"
+            query = query.filter(
+                or_(
+                    Conversation.title.ilike(search_term),
+                    # Could also search in participant names
+                )
+            )
+        
+        # Count total before pagination
+        total = query.count()
+        
+        # Apply sorting
+        if filters.sort_by == "title":
+            order_col = Conversation.title
+        elif filters.sort_by == "created_at":
+            order_col = Conversation.created_at
+        elif filters.sort_by == "last_message_at":
+            order_col = Conversation.last_message_at
+        else:  # last_activity_at
+            order_col = Conversation.last_activity_at
+        
+        if filters.sort_order == "asc":
+            query = query.order_by(order_col)
+        else:
+            query = query.order_by(desc(order_col))
+        
+        # Apply pagination
+        offset = (filters.page - 1) * filters.page_size
+        conversations = query.offset(offset).limit(filters.page_size).all()
+        
+        return conversations, total
+    
+    def get_messages_with_search(
+        self, 
+        db: Session, 
+        *, 
+        filters: MessageSearchFilters
+    ) -> Tuple[List[Message], int]:
+        """Get messages with search filters and pagination"""
+        query = db.query(Message)
+        
+        # Apply filters
+        if filters.conversation_id:
+            query = query.filter(Message.conversation_id == filters.conversation_id)
+        
+        if filters.sender_id:
+            query = query.filter(Message.sender_id == filters.sender_id)
+        
+        if filters.message_type:
+            query = query.filter(Message.message_type == filters.message_type)
+        
+        if filters.query:
+            search_term = f"%{filters.query}%"
+            query = query.filter(Message.content.ilike(search_term))
+        
+        if filters.date_from:
+            query = query.filter(Message.created_at >= filters.date_from)
+        
+        if filters.date_to:
+            query = query.filter(Message.created_at <= filters.date_to)
+        
+        # Count total before pagination
+        total = query.count()
+        
+        # Apply sorting
+        if filters.sort_by == "sent_at":
+            order_col = Message.sent_at
+        else:  # created_at
+            order_col = Message.created_at
+        
+        if filters.sort_order == "asc":
+            query = query.order_by(order_col)
+        else:
+            query = query.order_by(desc(order_col))
+        
+        # Apply pagination
+        offset = (filters.page - 1) * filters.page_size
+        messages = query.offset(offset).limit(filters.page_size).all()
+        
+        return messages, total
+    
+    def get_email_templates_with_search(
+        self, 
+        db: Session, 
+        *, 
+        filters: EmailTemplateSearchFilters
+    ) -> Tuple[List[EmailTemplate], int]:
+        """Get email templates with search filters and pagination"""
+        query = db.query(EmailTemplate)
+        
+        # Apply filters
+        if filters.template_type:
+            query = query.filter(EmailTemplate.template_type == filters.template_type)
+        
+        if filters.category:
+            query = query.filter(EmailTemplate.category == filters.category)
+        
+        if filters.language:
+            query = query.filter(EmailTemplate.language == filters.language)
+        
+        if filters.is_active is not None:
+            query = query.filter(EmailTemplate.is_active == filters.is_active)
+        
+        if filters.created_by:
+            query = query.filter(EmailTemplate.created_by_id == filters.created_by)
+        
+        if filters.query:
+            search_term = f"%{filters.query}%"
+            query = query.filter(
+                or_(
+                    EmailTemplate.name.ilike(search_term),
+                    EmailTemplate.subject.ilike(search_term),
+                    EmailTemplate.body.ilike(search_term)
+                )
+            )
+        
+        # Count total before pagination
+        total = query.count()
+        
+        # Apply sorting
+        if filters.sort_by == "usage_count":
+            order_col = EmailTemplate.usage_count
+        elif filters.sort_by == "created_at":
+            order_col = EmailTemplate.created_at
+        elif filters.sort_by == "last_used_at":
+            order_col = EmailTemplate.last_used_at
+        else:  # name
+            order_col = EmailTemplate.name
+        
+        if filters.sort_order == "asc":
+            query = query.order_by(order_col)
+        else:
+            query = query.order_by(desc(order_col))
+        
+        # Apply pagination
+        offset = (filters.page - 1) * filters.page_size
+        templates = query.offset(offset).limit(filters.page_size).all()
+        
+        return templates, total
+    
+    def is_conversation_participant(
+        self, 
+        db: Session, 
+        *, 
+        conversation_id: UUID, 
+        user_id: UUID
+    ) -> bool:
+        """Check if user is participant in conversation"""
+        participant = db.query(conversation_participants).filter(
+            and_(
+                conversation_participants.c.conversation_id == conversation_id,
+                conversation_participants.c.user_id == user_id,
+                conversation_participants.c.left_at.is_(None)
+            )
+        ).first()
+        
+        return participant is not None
+    
+    def get_conversation_with_details(
+        self, 
+        db: Session, 
+        *, 
+        id: UUID
+    ) -> Optional[Conversation]:
+        """Get conversation with details"""
+        return self.crud.get_with_details(db, id=id)
+    
+    def update_conversation(
+        self, 
+        db: Session, 
+        *, 
+        conversation_id: UUID,
+        update_data: Any,
+        updated_by: UUID
+    ) -> Optional[Conversation]:
+        """Update conversation"""
+        conversation = self.crud.get(db, id=conversation_id)
+        if not conversation:
+            return None
+        
+        # Update the conversation
+        for field, value in update_data.dict(exclude_unset=True).items():
+            setattr(conversation, field, value)
+        
+        db.commit()
+        return conversation
+    
+    def delete_conversation(
+        self, 
+        db: Session, 
+        *, 
+        conversation_id: UUID,
+        deleted_by: UUID
+    ) -> bool:
+        """Delete conversation"""
+        conversation = self.crud.get(db, id=conversation_id)
+        if not conversation:
+            return False
+        
+        # Check permissions
+        if conversation.created_by_id != deleted_by:
+            return False  # Only creator can delete
+        
+        db.delete(conversation)
+        db.commit()
+        return True
     
     def send_message(
         self, 
@@ -116,6 +354,65 @@ class MessagingService(BaseService[Conversation, messaging_crud.CRUDConversation
             self._notify_mentions(db, message, message_data.mentions)
         
         return message
+    
+    def update_message(
+        self, 
+        db: Session, 
+        *, 
+        message_id: UUID,
+        update_data: Any,
+        updated_by: UUID
+    ) -> Optional[Message]:
+        """Update a message"""
+        message = self.message_crud.get(db, id=message_id)
+        if not message:
+            return None
+        
+        # Check if user can update (sender or admin)
+        if message.sender_id != updated_by:
+            return None
+        
+        # Update the message
+        for field, value in update_data.dict(exclude_unset=True).items():
+            setattr(message, field, value)
+        
+        message.is_edited = True
+        db.commit()
+        return message
+    
+    def delete_message(
+        self, 
+        db: Session, 
+        *, 
+        message_id: UUID,
+        deleted_by: UUID
+    ) -> bool:
+        """Delete a message"""
+        message = self.message_crud.get(db, id=message_id)
+        if not message:
+            return False
+        
+        # Check permissions (sender or admin)
+        if message.sender_id != deleted_by:
+            return False
+        
+        message.is_deleted = True
+        db.commit()
+        return True
+    
+    def mark_message_as_read(
+        self, 
+        db: Session, 
+        *, 
+        message_id: UUID,
+        reader_id: UUID
+    ) -> bool:
+        """Mark a single message as read"""
+        return self.message_crud.mark_as_read(
+            db, 
+            message_id=message_id,
+            user_id=reader_id
+        )
     
     def mark_messages_as_read(
         self, 

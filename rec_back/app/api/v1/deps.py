@@ -48,6 +48,11 @@ async def get_current_user(
             settings.SECRET_KEY,
             algorithms=[settings.ALGORITHM]
         )
+        # Check token type if present (for compatibility with security.py tokens)
+        token_type = payload.get("type")
+        if token_type is not None and token_type != "access":
+            raise credentials_exception
+            
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
@@ -265,6 +270,11 @@ async def get_optional_current_user(
             settings.SECRET_KEY,
             algorithms=[settings.ALGORITHM]
         )
+        # Check token type if present (for compatibility with security.py tokens)
+        token_type = payload.get("type")
+        if token_type is not None and token_type != "access":
+            return None
+            
         user_id: str = payload.get("sub")
         if user_id is None:
             return None

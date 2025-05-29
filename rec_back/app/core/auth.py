@@ -61,11 +61,13 @@ async def get_current_active_user(
 def require_role(required_role: UserRole):
     """Dependency factory for role-based access control."""
     def role_checker(current_user: User = Depends(get_current_active_user)) -> User:
-        # Role hierarchy: super_admin > admin > employee
+        # Role hierarchy: superadmin > admin > consultant/employer/candidate
         role_hierarchy = {
-            UserRole.SUPER_ADMIN: 3,
-            UserRole.ADMIN: 2,
-            UserRole.EMPLOYEE: 1
+            UserRole.SUPERADMIN: 4,
+            UserRole.ADMIN: 3,
+            UserRole.CONSULTANT: 2,
+            UserRole.EMPLOYER: 1,
+            UserRole.CANDIDATE: 1
         }
         
         user_level = role_hierarchy.get(current_user.role, 0)
@@ -83,4 +85,4 @@ def require_role(required_role: UserRole):
 
 # Convenience dependencies for common roles
 require_admin = require_role(UserRole.ADMIN)
-require_super_admin = require_role(UserRole.SUPER_ADMIN)
+require_super_admin = require_role(UserRole.SUPERADMIN)

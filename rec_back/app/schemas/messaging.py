@@ -57,7 +57,6 @@ class MessageBase(BaseModel):
     parent_message_id: Optional[UUID] = None
     reply_to_id: Optional[UUID] = None
     mentions: Optional[List[UUID]] = None
-    metadata: Optional[Dict[str, Any]] = None
 
 
 class MessageCreate(MessageBase):

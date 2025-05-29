@@ -87,10 +87,7 @@ async def create_conversation(
     try:
         conversation = messaging_service.create_conversation(
             db,
-            title=conversation_data.title,
-            conversation_type=conversation_data.conversation_type,
-            participant_ids=conversation_data.participant_ids,
-            initial_message=conversation_data.initial_message,
+            request=conversation_data,
             created_by=current_user.id
         )
         return conversation
@@ -295,10 +292,7 @@ async def send_message(
             db,
             conversation_id=conversation_id,
             sender_id=current_user.id,
-            content=message_data.content,
-            message_type=message_data.message_type,
-            reply_to_id=message_data.reply_to_id,
-            attachments=message_data.attachments
+            message_data=message_data
         )
         return message
     except ValueError as e:

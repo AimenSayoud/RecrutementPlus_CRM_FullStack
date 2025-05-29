@@ -15,21 +15,42 @@ class CandidateProfile(BaseModel):
     current_company = Column(String(200), nullable=True)
     summary = Column(Text, nullable=True)
     years_of_experience = Column(Integer, nullable=True, default=0)
+    date_of_birth = Column(Date, nullable=True)
+    nationality = Column(String(100), nullable=True)
     
     # Location
     location = Column(String, nullable=True)  # Kept for backward compatibility
     city = Column(String(100), nullable=True)
     country = Column(String(100), nullable=True)
+    address = Column(String(500), nullable=True)
+    postal_code = Column(String(20), nullable=True)
     
     # Profile Status
     profile_completed = Column(Boolean, default=False, nullable=False)
+    profile_visibility = Column(String(20), default="public", nullable=False)
+    is_open_to_opportunities = Column(Boolean, default=True, nullable=False)
     
     # Documents
     cv_urls = Column(JSONB, nullable=True)  # Array of CV file URLs
+    cover_letter_url = Column(String(500), nullable=True)
+    
+    # Social/Professional Links
+    linkedin_url = Column(String(500), nullable=True)
+    github_url = Column(String(500), nullable=True)
+    portfolio_url = Column(String(500), nullable=True)
+    
+    # Additional Information
+    languages = Column(JSONB, nullable=True)  # Array of language objects
+    certifications = Column(JSONB, nullable=True)  # Array of certification objects
+    awards = Column(JSONB, nullable=True)  # Array of award objects
+    publications = Column(JSONB, nullable=True)  # Array of publication objects
     
     # Preferences
     willing_to_relocate = Column(Boolean, default=False, nullable=False)
     salary_expectation = Column(Integer, nullable=True)
+    
+    # Notes
+    notes = Column(Text, nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="candidate_profile")

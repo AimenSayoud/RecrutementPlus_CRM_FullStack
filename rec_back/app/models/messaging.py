@@ -35,7 +35,6 @@ class Conversation(BaseModel):
     # Metadata
     description = Column(Text, nullable=True)
     tags = Column(JSONB, nullable=True)  # Array of tags for categorization
-    conversation_data = Column(JSONB, nullable=True)  # Additional flexible data (renamed from conversation_metadata)
     
     # Statistics
     total_messages = Column(Integer, nullable=False, default=0)
@@ -75,7 +74,6 @@ class Message(BaseModel):
     read_at = Column(DateTime, nullable=True)
     
     # Metadata
-    message_data = Column(JSONB, nullable=True)  # Rich content, formatting, etc. (renamed from conversation_metadata)
     mentions = Column(JSONB, nullable=True)  # Array of mentioned user IDs
     reactions = Column(JSONB, nullable=True)  # Emoji reactions
     
