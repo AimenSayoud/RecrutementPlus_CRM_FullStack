@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any, Union
 # --- CV Analysis Models ---
 class CVAnalysisRequest(BaseModel):
     cv_text: str
+    candidate_id: Optional[str] = None
 
 class CandidateFeedbackRequest(BaseModel):
     candidate: Dict[str, Any]
@@ -33,17 +34,17 @@ class CVAnalysisResponse(BaseModel):
     experience: Optional[List[ExperienceEntry]] = Field(default_factory=list)
     total_experience_years: Optional[int] = 0
     summary: Optional[str] = ""
-    skill_ids: Optional[List[int]] = Field(default_factory=list)
+    skill_ids: Optional[List[str]] = Field(default_factory=list)
     analysis_method: Optional[str] = None # To indicate if it was OpenAI or fallback
 
 # --- Job Matching Models ---
 class JobMatchRequest(BaseModel):
     cv_analysis: CVAnalysisResponse # Can use the CVAnalysisResponse directly
-    job_id: Optional[int] = None
+    job_id: Optional[str] = None
     max_jobs_to_match: Optional[int] = 5
 
 class JobMatchResponseItem(BaseModel):
-    job_id: int
+    job_id: str
     job_title: str
     company_name: str
     match_score: float

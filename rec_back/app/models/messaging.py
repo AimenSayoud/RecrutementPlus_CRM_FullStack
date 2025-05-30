@@ -205,7 +205,7 @@ class EmailTemplate(BaseModel):
     # Additional metadata
     description = Column(Text, nullable=True)
     tags = Column(JSONB, nullable=True)
-    template_data = Column(JSONB, nullable=True)  # Additional template metadata (renamed from conversation_metadata)
+    conversation_metadata = Column(JSONB, nullable=True)  # Additional template metadata
     
     # Relationships
     created_by = relationship("User", foreign_keys=[created_by_id])
