@@ -1,7 +1,7 @@
 // src/components/candidates/CandidateDetailModal.tsx
 import React, { useState } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser } from '@/store/useAuthStore';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
@@ -42,7 +42,7 @@ const CandidateDetailModal: React.FC<CandidateDetailModalProps> = ({
   isCreate = false,
 }) => {
   const { colors } = useTheme();
-  const { user } = useAuth();
+  const user = useAuthStore(selectUser);
   const [activeTab, setActiveTab] = useState('details');
   
   // Initialize form with candidate data or empty values for new candidate

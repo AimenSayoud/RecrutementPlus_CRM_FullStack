@@ -1,196 +1,850 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional, Dict, Any
-import json
-from pathlib import Path
-import os
-from datetime import datetime
+# app/api/v1/endpoints/candidates.py
+from typing import Any, List, Dict
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.orm import Session
+from uuid import UUID
+
+from app.api.v1 import deps
+from app.models.enums import UserRole
+from app.schemas.candidate import (
+    CandidateProfile, CandidateProfileCreate, CandidateProfileUpdate,
+    CandidateFullProfile, Education, EducationCreate, EducationUpdate,
+    WorkExperience, WorkExperienceCreate, WorkExperienceUpdate,
+    CandidateJobPreference, CandidateJobPreferenceCreate, CandidateJobPreferenceUpdate,
+    CandidateSearchFilters, CandidateListResponse,
+    CandidateNotificationSettings, CandidateNotificationSettingsUpdate,
+    CandidateSkill, CandidateSkillCreate
+)
+from app.services.candidate import candidate_service
 
 router = APIRouter()
 
-# Helper function to load data
-def load_data(filename):
+
+@router.get("/me", response_model=CandidateProfile)
+def get_my_candidate_profile(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get current user's candidate profile
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    return profile
+
+
+@router.post("/me", response_model=CandidateProfile)
+def create_my_candidate_profile(
+    *,
+    db: Session = Depends(deps.get_db),
+    profile_in: CandidateProfileCreate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Create candidate profile for current user
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    # Check if profile already exists
+    existing = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile already exists"
+        )
+    
+    profile_in.user_id = current_user.id
+    profile = candidate_service.crud.create(db, obj_in=profile_in)
+    return profile
+
+
+@router.put("/me", response_model=CandidateProfile)
+def update_my_candidate_profile(
+    *,
+    db: Session = Depends(deps.get_db),
+    profile_in: CandidateProfileUpdate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update current user's candidate profile
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    profile = candidate_service.crud.update(db, db_obj=profile, obj_in=profile_in)
+    return profile
+
+
+@router.post("/me/complete-profile", response_model=CandidateProfile)
+def complete_profile(
+    *,
+    db: Session = Depends(deps.get_db),
+    profile_data: dict,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Complete candidate profile with all components (education, experience, skills, preferences)
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
     try:
-        file_path = Path(f"fake_data/{filename}")
-        with open(file_path, "r") as f:
-            return json.load(f)
+        profile = candidate_service.create_complete_profile(
+            db,
+            user_id=current_user.id,
+            profile_data=profile_data
+        )
+        return profile
     except Exception as e:
-        print(f"Error loading {filename}: {e}")
-        return []
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
 
-# Load related data
-def get_all_data():
-    candidates = load_data("candidate_profiles.json")
-    users = load_data("users.json")
-    skills_data = load_data("skills.json")
-    cv_samples = load_data("cv_samples.json")
-    
-    # Create skill lookup
-    skill_lookup = {skill["id"]: skill["name"] for skill in skills_data}
-    
-    # Create CV content lookup
-    cv_lookup = {sample["candidate_user_id"]: sample["content"] for sample in cv_samples}
-    
-    # Associate user data with candidate profiles
-    enhanced_candidates = []
-    for candidate in candidates:
-        user = next((u for u in users if u["id"] == candidate["user_id"]), None)
-        if user:
-            # Get current job from experience if available
-            current_job = next((exp for exp in candidate.get("experience", []) if exp.get("current", False)), {})
-            
-            # Get education details
-            education = candidate.get("education", [{}])[0] if candidate.get("education") else {}
-            
-            # Format for frontend schema
-            enhanced_candidate = {
-                "id": str(candidate["id"]),
-                "firstName": user["first_name"],
-                "lastName": user["last_name"],
-                "email": user["email"],
-                "phone": candidate.get("phone", ""),
-                "position": current_job.get("title", "Unknown Position"),
-                "company": current_job.get("company", ""),
-                "status": "available",  # Default status
-                "cvUrl": candidate.get("cv_urls", [""])[0] if candidate.get("cv_urls") else None,
-                "cvContent": cv_lookup.get(candidate["user_id"], ""),
-                "education": {
-                    "institution": education.get("institution", ""),
-                    "degree": education.get("degree", ""),
-                    "fieldOfStudy": education.get("field_of_study", ""),
-                    "graduationYear": education.get("end_date", "").split("-")[0] if education.get("end_date") else ""
-                },
-                "location": candidate.get("location", ""),
-                "createdAt": datetime.fromisoformat(user["created_at"]) if isinstance(user["created_at"], str) else datetime.now(),
-                "updatedAt": datetime.fromisoformat(user["updated_at"]) if isinstance(user["updated_at"], str) else datetime.now(),
-                "skills": [skill_lookup.get(skill_id, f"Skill-{skill_id}") for skill_id in candidate.get("skill_ids", [])],
-                "tags": [{"id": str(i), "name": skill_lookup.get(skill_id, f"Skill-{skill_id}"), "color": f"#{hash(skill_lookup.get(skill_id, f'Skill-{skill_id}')) % 0xFFFFFF:06x}"} 
-                         for i, skill_id in enumerate(candidate.get("skill_ids", []))],
-                "experiences": [
-                    {
-                        "id": str(exp.get("id", i)),
-                        "position": exp.get("title", ""),
-                        "company": exp.get("company", ""),
-                        "startDate": exp.get("start_date", ""),
-                        "endDate": exp.get("end_date", None),
-                        "description": exp.get("description", ""),
-                        "current": exp.get("current", False)
-                    }
-                    for i, exp in enumerate(candidate.get("experience", []))
-                ],
-                "preferences": {
-                    "desiredSectors": candidate.get("preferences", {}).get("desired_sectors", []),
-                    "desiredLocations": candidate.get("preferences", {}).get("desired_locations", []),
-                    "contractTypes": candidate.get("preferences", {}).get("contract_types", []),
-                    "salaryExpectation": candidate.get("preferences", {}).get("salary_expectation", 0),
-                    "willingToRelocate": candidate.get("preferences", {}).get("willing_to_relocate", False)
-                },
-                "rating": len(candidate.get("skill_ids", [])) % 5 + 1,  # Mock rating based on skills
-                "assignedTo": f"user-{(candidate['id'] % 3) + 1}",  # Mock assignment
-                "officeId": str((candidate["id"] % 3) + 1)  # Mock office assignment
-            }
-            enhanced_candidates.append(enhanced_candidate)
-    
-    return enhanced_candidates
 
-@router.get("/")
-async def get_candidates(
-    office_id: Optional[str] = None,
-    skill: Optional[str] = None,
-    status: Optional[str] = None,
-    search: Optional[str] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100)
-):
-    """Get all candidates, optionally filtered by various parameters"""
-    candidates = get_all_data()
+@router.get("/me/completion-percentage")
+def get_profile_completion(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get profile completion percentage
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
     
-    # Filter by office if provided
-    if office_id:
-        candidates = [c for c in candidates if c["officeId"] == office_id]
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        return {"completion_percentage": 0}
     
-    # Filter by skill if provided
-    if skill:
-        candidates = [c for c in candidates if skill.lower() in [s.lower() for s in c["skills"]]]
+    percentage = candidate_service.get_profile_completion_percentage(
+        db,
+        candidate_id=profile.id
+    )
+    return {"completion_percentage": percentage}
+
+
+# Education endpoints
+@router.get("/me/education", response_model=List[Education])
+def get_my_education(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get current user's education records
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
     
-    # Filter by status if provided
-    if status:
-        candidates = [c for c in candidates if c["status"].lower() == status.lower()]
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
     
-    # Filter by search term if provided
-    if search:
-        search_lower = search.lower()
-        candidates = [c for c in candidates if 
-                    search_lower in c["firstName"].lower() or 
-                    search_lower in c["lastName"].lower() or 
-                    search_lower in c["position"].lower() or
-                    search_lower in c["company"].lower() or
-                    any(search_lower in skill.lower() for skill in c["skills"])]
+    education = candidate_service.education_crud.get_by_candidate(
+        db,
+        candidate_id=profile.id
+    )
+    return education
+
+
+@router.post("/me/education", response_model=Education)
+def add_education(
+    *,
+    db: Session = Depends(deps.get_db),
+    education_in: EducationCreate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Add education record
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
     
-    # Get total count before pagination
-    total_count = len(candidates)
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
     
-    # Apply pagination
-    candidates = candidates[skip:skip + limit]
+    education_in.candidate_id = profile.id
+    education = candidate_service.education_crud.create_for_candidate(
+        db,
+        obj_in=education_in
+    )
+    
+    # Update profile completion
+    candidate_service.crud.update_profile_completion(db, candidate_id=profile.id)
+    
+    return education
+
+
+@router.put("/me/education/{education_id}", response_model=Education)
+def update_education(
+    *,
+    db: Session = Depends(deps.get_db),
+    education_id: UUID,
+    education_in: EducationUpdate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update education record
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    education = candidate_service.education_crud.get(db, id=education_id)
+    if not education:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Education record not found"
+        )
+    
+    # Verify ownership
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile or education.candidate_id != profile.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this education record"
+        )
+    
+    education = candidate_service.education_crud.update(
+        db,
+        db_obj=education,
+        obj_in=education_in
+    )
+    return education
+
+
+@router.delete("/me/education/{education_id}")
+def delete_education(
+    *,
+    db: Session = Depends(deps.get_db),
+    education_id: UUID,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Delete education record
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    education = candidate_service.education_crud.get(db, id=education_id)
+    if not education:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Education record not found"
+        )
+    
+    # Verify ownership
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile or education.candidate_id != profile.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete this education record"
+        )
+    
+    candidate_service.education_crud.remove(db, id=education_id)
+    
+    # Update profile completion
+    candidate_service.crud.update_profile_completion(db, candidate_id=profile.id)
+    
+    return {"message": "Education record deleted successfully"}
+
+
+# Work Experience endpoints
+@router.get("/me/experience", response_model=List[WorkExperience])
+def get_my_experience(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get current user's work experience records
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    experience = candidate_service.experience_crud.get_by_candidate(
+        db,
+        candidate_id=profile.id
+    )
+    return experience
+
+
+@router.post("/me/experience", response_model=WorkExperience)
+def add_experience(
+    *,
+    db: Session = Depends(deps.get_db),
+    experience_in: WorkExperienceCreate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Add work experience record
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    experience_in.candidate_id = profile.id
+    experience = candidate_service.experience_crud.create_for_candidate(
+        db,
+        obj_in=experience_in
+    )
+    
+    # Update years of experience
+    total_years = candidate_service.experience_crud.calculate_total_experience(
+        db,
+        candidate_id=profile.id
+    )
+    profile.years_of_experience = total_years
+    
+    # Update profile completion
+    candidate_service.crud.update_profile_completion(db, candidate_id=profile.id)
+    
+    return experience
+
+
+@router.put("/me/experience/{experience_id}", response_model=WorkExperience)
+def update_experience(
+    *,
+    db: Session = Depends(deps.get_db),
+    experience_id: UUID,
+    experience_in: WorkExperienceUpdate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update work experience record
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    experience = candidate_service.experience_crud.get(db, id=experience_id)
+    if not experience:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Experience record not found"
+        )
+    
+    # Verify ownership
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile or experience.candidate_id != profile.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this experience record"
+        )
+    
+    experience = candidate_service.experience_crud.update(
+        db,
+        db_obj=experience,
+        obj_in=experience_in
+    )
+    
+    # Update years of experience
+    total_years = candidate_service.experience_crud.calculate_total_experience(
+        db,
+        candidate_id=profile.id
+    )
+    profile.years_of_experience = total_years
+    db.commit()
+    
+    return experience
+
+
+@router.delete("/me/experience/{experience_id}")
+def delete_experience(
+    *,
+    db: Session = Depends(deps.get_db),
+    experience_id: UUID,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Delete work experience record
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    experience = candidate_service.experience_crud.get(db, id=experience_id)
+    if not experience:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Experience record not found"
+        )
+    
+    # Verify ownership
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile or experience.candidate_id != profile.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete this experience record"
+        )
+    
+    candidate_service.experience_crud.remove(db, id=experience_id)
+    
+    # Update years of experience
+    total_years = candidate_service.experience_crud.calculate_total_experience(
+        db,
+        candidate_id=profile.id
+    )
+    profile.years_of_experience = total_years
+    
+    # Update profile completion
+    candidate_service.crud.update_profile_completion(db, candidate_id=profile.id)
+    db.commit()
+    
+    return {"message": "Experience record deleted successfully"}
+
+
+# Skills endpoints
+@router.get("/me/skills", response_model=List[CandidateSkill])
+def get_my_skills(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get current user's skills
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    skills = candidate_service.skill_crud.get_by_candidate(db, candidate_id=profile.id)
+    return skills
+
+
+@router.put("/me/skills", response_model=List[CandidateSkill])
+def update_my_skills(
+    *,
+    db: Session = Depends(deps.get_db),
+    skills: List[Dict[str, Any]],
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update all skills (replaces existing)
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    updated_skills = candidate_service.update_candidate_skills(
+        db,
+        candidate_id=profile.id,
+        skills=skills
+    )
+    
+    # Update profile completion
+    candidate_service.crud.update_profile_completion(db, candidate_id=profile.id)
+    
+    return updated_skills
+
+
+# Job Preferences endpoints
+@router.get("/me/preferences", response_model=CandidateJobPreference)
+def get_my_preferences(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get current user's job preferences
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    preferences = candidate_service.preference_crud.get_by_candidate(
+        db,
+        candidate_id=profile.id
+    )
+    if not preferences:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Preferences not found"
+        )
+    
+    return preferences
+
+
+@router.put("/me/preferences", response_model=CandidateJobPreference)
+def update_my_preferences(
+    *,
+    db: Session = Depends(deps.get_db),
+    preferences_in: CandidateJobPreferenceUpdate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update job preferences
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    preferences = candidate_service.preference_crud.create_or_update(
+        db,
+        candidate_id=profile.id,
+        obj_in=preferences_in
+    )
+    
+    # Update profile completion
+    candidate_service.crud.update_profile_completion(db, candidate_id=profile.id)
+    
+    return preferences
+
+
+# Notification Settings endpoints
+@router.get("/me/notification-settings", response_model=CandidateNotificationSettings)
+def get_my_notification_settings(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get notification settings
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    settings = candidate_service.notification_crud.get_by_candidate(
+        db,
+        candidate_id=profile.id
+    )
+    if not settings:
+        # Create default settings
+        settings = candidate_service.notification_crud.create_or_update(
+            db,
+            candidate_id=profile.id,
+            obj_in=CandidateNotificationSettingsUpdate()
+        )
+    
+    return settings
+
+
+@router.put("/me/notification-settings", response_model=CandidateNotificationSettings)
+def update_my_notification_settings(
+    *,
+    db: Session = Depends(deps.get_db),
+    settings_in: CandidateNotificationSettingsUpdate,
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Update notification settings
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    settings = candidate_service.notification_crud.create_or_update(
+        db,
+        candidate_id=profile.id,
+        obj_in=settings_in
+    )
+    
+    return settings
+
+
+# Job Matching endpoints
+@router.get("/me/matching-jobs")
+def get_matching_jobs(
+    *,
+    db: Session = Depends(deps.get_db),
+    limit: int = Query(10, ge=1, le=50),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get jobs matching candidate profile
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    matching_jobs = candidate_service.find_matching_jobs(
+        db,
+        candidate_id=profile.id,
+        limit=limit
+    )
     
     return {
-        "items": candidates,
-        "totalCount": total_count,
-        "page": skip // limit + 1 if limit > 0 else 1,
-        "pageSize": limit,
-        "pageCount": (total_count + limit - 1) // limit if limit > 0 else 1
+        "jobs": [
+            {
+                "job": job,
+                "match_score": score
+            }
+            for job, score in matching_jobs
+        ]
     }
 
-@router.get("/{candidate_id}")
-async def get_candidate(candidate_id: str):
-    """Get a specific candidate by ID"""
-    candidates = get_all_data()
-    candidate = next((c for c in candidates if c["id"] == candidate_id), None)
+
+@router.get("/me/skill-recommendations")
+def get_skill_recommendations(
+    *,
+    db: Session = Depends(deps.get_db),
+    limit: int = Query(10, ge=1, le=20),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get skill recommendations based on profile
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
     
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    recommendations = candidate_service.suggest_skills_for_candidate(
+        db,
+        candidate_id=profile.id,
+        limit=limit
+    )
+    
+    return {"recommendations": recommendations}
+
+
+@router.get("/me/career-progression")
+def get_career_progression(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get career progression suggestions
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    progression = candidate_service.get_career_progression_suggestions(
+        db,
+        candidate_id=profile.id
+    )
+    
+    return progression
+
+
+@router.get("/me/application-analytics")
+def get_application_analytics(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = Depends(deps.get_current_active_user)
+) -> Any:
+    """
+    Get application analytics
+    """
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a candidate user"
+        )
+    
+    profile = candidate_service.crud.get_by_user_id(db, user_id=current_user.id)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate profile not found"
+        )
+    
+    analytics = candidate_service.get_application_analytics(
+        db,
+        candidate_id=profile.id
+    )
+    
+    return analytics
+
+
+# Search candidates (for consultants/admins)
+@router.post("/search", response_model=CandidateListResponse)
+def search_candidates(
+    *,
+    db: Session = Depends(deps.get_db),
+    filters: CandidateSearchFilters,
+    current_user: deps.CurrentUser = Depends(deps.get_current_consultant_or_admin)
+) -> Any:
+    """
+    Search candidates with filters (Consultant/Admin only)
+    """
+    candidates, total = candidate_service.crud.get_multi_with_search(
+        db,
+        filters=filters
+    )
+    
+    return CandidateListResponse(
+        candidates=[CandidateFullProfile.from_orm(c) for c in candidates],
+        total=total,
+        page=filters.page,
+        page_size=filters.page_size,
+        total_pages=(total + filters.page_size - 1) // filters.page_size
+    )
+
+
+@router.get("/{candidate_id}", response_model=CandidateFullProfile)
+def get_candidate(
+    *,
+    db: Session = Depends(deps.get_db),
+    candidate_id: UUID,
+    current_user: deps.CurrentUser = Depends(deps.get_current_consultant_or_admin)
+) -> Any:
+    """
+    Get candidate by ID (Consultant/Admin only)
+    """
+    candidate = candidate_service.crud.get_with_details(db, id=candidate_id)
     if not candidate:
-        raise HTTPException(status_code=404, detail="Candidate not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate not found"
+        )
     
-    return candidate
-
-@router.post("/")
-async def create_candidate(candidate: Dict[str, Any]):
-    """Create a new candidate (mock implementation)"""
-    # In a real implementation, we would save to the database
-    # For this mock API, we'll just return the candidate with an ID
-    candidate["id"] = f"new-{datetime.now().timestamp()}"
-    candidate["createdAt"] = datetime.now()
-    candidate["updatedAt"] = datetime.now()
-    
-    # Generate other missing fields as needed
-    if "skills" not in candidate:
-        candidate["skills"] = []
-    if "tags" not in candidate:
-        candidate["tags"] = []
-    
-    return candidate
-
-@router.put("/{candidate_id}")
-async def update_candidate(candidate_id: str, candidate: Dict[str, Any]):
-    """Update a candidate (mock implementation)"""
-    candidates = get_all_data()
-    existing = next((c for c in candidates if c["id"] == candidate_id), None)
-    
-    if not existing:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    
-    # In a real implementation, we would update the database
-    # For this mock API, we'll just return the updated candidate
-    updated = {**existing, **candidate, "updatedAt": datetime.now()}
-    return updated
-
-@router.delete("/{candidate_id}")
-async def delete_candidate(candidate_id: str):
-    """Delete a candidate (mock implementation)"""
-    candidates = get_all_data()
-    existing = next((c for c in candidates if c["id"] == candidate_id), None)
-    
-    if not existing:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    
-    # In a real implementation, we would remove from the database
-    # For this mock API, we'll just return success
-    return {"success": True, "message": f"Candidate {candidate_id} deleted"}
+    return CandidateFullProfile.from_orm(candidate)

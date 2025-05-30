@@ -1,277 +1,446 @@
-from fastapi import APIRouter, HTTPException, Query, Body, Depends
-from typing import List, Optional, Dict, Any
-import json
-from pathlib import Path
-from datetime import datetime
-import random
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from sqlalchemy.orm import Session
+from typing import Optional, List, Dict, Any
+from uuid import UUID
+
+from app.api.v1.deps import (
+    get_database, get_current_active_user, get_admin_user,
+    get_pagination_params, PaginationParams,
+    get_common_filters, CommonFilters,
+    check_resource_ownership
+)
+from app.services.user import user_service
+from app.schemas.auth import UserResponse, RegisterRequest
+from app.models.user import User
+from app.models.enums import UserRole
 
 router = APIRouter()
 
-# Helper function to load data
-def load_data(filename):
-    try:
-        file_path = Path(f"fake_data/{filename}")
-        with open(file_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading {filename}: {e}")
-        return []
-
-# Format user data for frontend
-def format_user(user, include_extended_info=False):
-    # Basic user info
-    formatted_user = {
-        "id": str(user["id"]),
-        "name": f"{user['first_name']} {user['last_name']}",
-        "firstName": user["first_name"],
-        "lastName": user["last_name"],
-        "email": user["email"],
-        "role": map_role(user["role"]),
-        "officeId": str((user["id"] % 3) + 1),  # Mock office assignment
-        "createdAt": datetime.fromisoformat(user["created_at"]) if isinstance(user["created_at"], str) else datetime.now(),
-        "updatedAt": datetime.fromisoformat(user["updated_at"]) if isinstance(user["updated_at"], str) else datetime.now(),
-        "lastLogin": datetime.fromisoformat(user["last_login"]) if isinstance(user.get("last_login", ""), str) else None,
-        "isActive": user.get("is_active", True)
-    }
+@router.get("/", response_model=List[UserResponse])
+async def list_users(
+    # Search and filtering
+    role: Optional[UserRole] = Query(None, description="Filter by user role"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    is_verified: Optional[bool] = Query(None, description="Filter by verification status"),
+    office_id: Optional[str] = Query(None, description="Filter by office ID"),
     
-    # If extended info is requested, include role-specific data
-    if include_extended_info:
-        # Get role-specific profile data
-        if user["role"] == "admin":
-            admin_profiles = load_data("admin_profiles.json")
-            profile = next((p for p in admin_profiles if p["user_id"] == user["id"]), None)
-            if profile:
-                formatted_user["permissions"] = profile.get("permissions", [])
-                formatted_user["activities"] = profile.get("activities", [])
-                
-        elif user["role"] == "consultant":
-            consultant_profiles = load_data("consultant_profiles.json")
-            profile = next((p for p in consultant_profiles if p["user_id"] == user["id"]), None)
-            if profile:
-                formatted_user["phone"] = profile.get("phone", "")
-                formatted_user["specializations"] = profile.get("specializations", [])
-                formatted_user["performance"] = profile.get("performance_metrics", {})
-                
-        elif user["role"] == "employer":
-            employer_profiles = load_data("employer_profiles.json")
-            company_profiles = load_data("company_profiles.json")
-            
-            # Try employer profiles first
-            profile = next((p for p in employer_profiles if p["user_id"] == user["id"]), None)
-            if not profile:
-                # If not found, try company profiles
-                profile = next((p for p in company_profiles if p["user_id"] == user["id"]), None)
-                
-            if profile:
-                formatted_user["company"] = profile.get("company_name", "")
-                formatted_user["phone"] = profile.get("contact_details", {}).get("phone", "")
-                formatted_user["industry"] = profile.get("industry", "")
-                
-        elif user["role"] == "candidate":
-            candidate_profiles = load_data("candidate_profiles.json")
-            profile = next((p for p in candidate_profiles if p["user_id"] == user["id"]), None)
-            if profile:
-                formatted_user["phone"] = profile.get("phone", "")
-                formatted_user["location"] = profile.get("location", "")
-                formatted_user["skills"] = get_skill_names(profile.get("skill_ids", []))
-                
-        elif user["role"] == "superadmin":
-            superadmin_profiles = load_data("superadmin_profiles.json")
-            profile = next((p for p in superadmin_profiles if p["user_id"] == user["id"]), None)
-            if profile:
-                formatted_user["accessLevel"] = profile.get("system_access_level", "full")
-                formatted_user["systemChanges"] = profile.get("system_changes", [])
+    # Pagination and common filters
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
     
-    return formatted_user
-
-# Map backend role to frontend role
-def map_role(role):
-    role_map = {
-        "superadmin": "super_admin",
-        "admin": "admin",
-        "consultant": "employee",
-        "employer": "client",
-        "candidate": "candidate"
-    }
-    return role_map.get(role, "employee")
-
-# Get skill names from skill IDs
-def get_skill_names(skill_ids):
-    skills_data = load_data("skills.json")
-    skill_lookup = {skill["id"]: skill["name"] for skill in skills_data}
-    return [skill_lookup.get(skill_id, f"Skill-{skill_id}") for skill_id in skill_ids]
-
-@router.get("/")
-async def get_users(
-    office_id: Optional[str] = None,
-    role: Optional[str] = None,
-    search: Optional[str] = None,
-    active: Optional[bool] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100)
+    # Authentication
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
 ):
-    """Get all users, optionally filtered by various parameters"""
-    users = load_data("users.json")
-    
-    # Apply filters
-    if role:
-        # Map frontend role to backend role
-        backend_role = None
-        if role == "super_admin":
-            backend_role = "superadmin"
-        elif role == "admin":
-            backend_role = "admin"
-        elif role == "employee":
-            backend_role = "consultant"
-        elif role == "client":
-            backend_role = "employer"
-        elif role == "candidate":
-            backend_role = "candidate"
-            
-        if backend_role:
-            users = [u for u in users if u["role"] == backend_role]
-    
-    if active is not None:
-        users = [u for u in users if u.get("is_active", True) == active]
-    
-    if search:
-        search_lower = search.lower()
-        users = [u for u in users if 
-                search_lower in u["first_name"].lower() or 
-                search_lower in u["last_name"].lower() or 
-                search_lower in u["email"].lower()]
-    
-    # Format users for frontend
-    formatted_users = [format_user(user) for user in users]
-    
-    # Filter by office if provided
-    if office_id:
-        formatted_users = [u for u in formatted_users if u["officeId"] == office_id]
-    
-    # Get total count before pagination
-    total_count = len(formatted_users)
-    
-    # Apply pagination
-    formatted_users = formatted_users[skip:skip + limit]
-    
-    return {
-        "items": formatted_users,
-        "totalCount": total_count,
-        "page": skip // limit + 1 if limit > 0 else 1,
-        "pageSize": limit,
-        "pageCount": (total_count + limit - 1) // limit if limit > 0 else 1
-    }
+    """
+    List users with search and filtering.
+    Only admins and superadmins can view all users.
+    """
+    try:
+        # Build search filters
+        search_filters = {
+            "query": filters.q,
+            "role": role,
+            "is_active": is_active,
+            "is_verified": is_verified,
+            "office_id": office_id,
+            "page": pagination.page,
+            "page_size": pagination.page_size,
+            "sort_by": filters.sort_by or "created_at",
+            "sort_order": filters.sort_order
+        }
+        
+        users, total = user_service.get_users_with_search(
+            db, filters=search_filters
+        )
+        
+        return {
+            "items": users,
+            "total": total,
+            "page": pagination.page,
+            "page_size": pagination.page_size,
+            "pages": (total + pagination.page_size - 1) // pagination.page_size
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving users: {str(e)}"
+        )
 
-@router.get("/{user_id}")
-async def get_user(user_id: str):
-    """Get a specific user by ID with extended profile information"""
-    users = load_data("users.json")
-    user = next((u for u in users if str(u["id"]) == user_id), None)
+@router.get("/{user_id}", response_model=UserResponse)
+async def get_user(
+    user_id: UUID = Path(..., description="User ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get user details by ID.
+    Users can view their own profile, admins can view any user.
+    """
+    # Check permissions
+    if not check_resource_ownership(user_id, current_user, allow_admin=True):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this user profile"
+        )
     
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    return format_user(user, include_extended_info=True)
+    try:
+        user = user_service.get_user_with_details(db, id=user_id)
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        
+        return user
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving user: {str(e)}"
+        )
 
-@router.post("/login")
-async def login(login_data: Dict[str, Any] = Body(...)):
-    """Mock login endpoint"""
-    users = load_data("users.json")
+@router.put("/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_update: dict,  # Would be proper UserUpdate schema
+    user_id: UUID = Path(..., description="User ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update user information.
+    Users can update their own profile, admins can update any user.
+    """
+    # Check permissions
+    if not check_resource_ownership(user_id, current_user, allow_admin=True):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to update this user profile"
+        )
     
-    user = next((u for u in users if u["email"] == login_data.get("email")), None)
-    
-    if not user or login_data.get("password") != "password":  # Simple mock for demo
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    # Check if user is active
-    if not user.get("is_active", True):
-        raise HTTPException(status_code=403, detail="User account is inactive")
-    
-    # Update last login time (in a real app, we would save this to database)
-    user["last_login"] = datetime.now().isoformat()
-    
-    # Generate mock token with user info
-    token = f"mock-token-{user['id']}-{user['role']}-{datetime.now().timestamp()}"
-    
-    return {
-        "user": format_user(user, include_extended_info=True),
-        "token": token,
-        "tokenExpiry": (datetime.now().timestamp() + 86400) * 1000  # 24 hours from now, in milliseconds
-    }
-
-@router.post("/")
-async def create_user(user_data: Dict[str, Any] = Body(...)):
-    """Create a new user (mock implementation)"""
-    users = load_data("users.json")
-    
-    # Check if email already exists
-    if any(u["email"] == user_data.get("email") for u in users):
-        raise HTTPException(status_code=400, detail="Email already in use")
-    
-    # Generate a new user ID
-    new_id = max([u["id"] for u in users], default=0) + 1
-    
-    # Create user
-    now = datetime.now().isoformat()
-    new_user = {
-        "id": new_id,
-        "email": user_data.get("email"),
-        "password_hash": "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW",  # Mock password hash
-        "first_name": user_data.get("firstName"),
-        "last_name": user_data.get("lastName"),
-        "role": map_role_to_backend(user_data.get("role", "employee")),
-        "is_active": user_data.get("isActive", True),
-        "created_at": now,
-        "updated_at": now,
-    }
-    
-    return format_user(new_user)
-
-@router.put("/{user_id}")
-async def update_user(user_id: str, user_data: Dict[str, Any] = Body(...)):
-    """Update a user (mock implementation)"""
-    users = load_data("users.json")
-    user = next((u for u in users if str(u["id"]) == user_id), None)
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Update user fields
-    if "firstName" in user_data:
-        user["first_name"] = user_data["firstName"]
-    if "lastName" in user_data:
-        user["last_name"] = user_data["lastName"]
-    if "email" in user_data:
-        user["email"] = user_data["email"]
-    if "role" in user_data:
-        user["role"] = map_role_to_backend(user_data["role"])
-    if "isActive" in user_data:
-        user["is_active"] = user_data["isActive"]
-    
-    user["updated_at"] = datetime.now().isoformat()
-    
-    return format_user(user, include_extended_info=True)
+    try:
+        updated_user = user_service.update_user(
+            db,
+            user_id=user_id,
+            update_data=user_update,
+            updated_by=current_user.id
+        )
+        if not updated_user:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        return updated_user
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating user: {str(e)}"
+        )
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str):
-    """Delete a user (mock implementation)"""
-    users = load_data("users.json")
-    user = next((u for u in users if str(u["id"]) == user_id), None)
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # In a real implementation, we would remove from the database
-    # For this mock API, we'll just return success
-    return {"success": True, "message": f"User {user_id} deleted"}
+async def delete_user(
+    user_id: UUID = Path(..., description="User ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Delete a user account.
+    Only admins and superadmins can delete users.
+    """
+    try:
+        success = user_service.delete_user(
+            db,
+            user_id=user_id,
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        return {"message": "User deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting user: {str(e)}"
+        )
 
-# Helper function to map frontend role to backend role
-def map_role_to_backend(frontend_role):
-    role_map = {
-        "super_admin": "superadmin",
-        "admin": "admin",
-        "employee": "consultant",
-        "client": "employer",
-        "candidate": "candidate"
-    }
-    return role_map.get(frontend_role, "consultant")
+@router.post("/{user_id}/activate")
+async def activate_user(
+    user_id: UUID = Path(..., description="User ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Activate a user account.
+    Only admins and superadmins can activate users.
+    """
+    try:
+        success = user_service.activate_user(
+            db,
+            user_id=user_id,
+            activated_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        return {"message": "User activated successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error activating user: {str(e)}"
+        )
+
+@router.post("/{user_id}/deactivate")
+async def deactivate_user(
+    user_id: UUID = Path(..., description="User ID"),
+    reason: Optional[str] = Query(None, description="Reason for deactivation"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Deactivate a user account.
+    Only admins and superadmins can deactivate users.
+    """
+    try:
+        success = user_service.deactivate_user(
+            db,
+            user_id=user_id,
+            reason=reason,
+            deactivated_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        return {"message": "User deactivated successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deactivating user: {str(e)}"
+        )
+
+@router.get("/{user_id}/activity")
+async def get_user_activity(
+    user_id: UUID = Path(..., description="User ID"),
+    activity_type: Optional[str] = Query(None, description="Filter by activity type"),
+    start_date: Optional[str] = Query(None, description="Start date for activity log"),
+    end_date: Optional[str] = Query(None, description="End date for activity log"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get user activity log.
+    Only admins and superadmins can view user activity.
+    """
+    try:
+        activity_log = user_service.get_user_activity_log(
+            db,
+            user_id=user_id,
+            activity_type=activity_type,
+            start_date=start_date,
+            end_date=end_date,
+            skip=pagination.offset,
+            limit=pagination.page_size
+        )
+        
+        return {
+            "user_id": str(user_id),
+            "activities": activity_log,
+            "page": pagination.page,
+            "page_size": pagination.page_size
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving user activity: {str(e)}"
+        )
+
+@router.post("/bulk-import")
+async def bulk_import_users(
+    user_data: List[RegisterRequest],
+    send_invitations: bool = Query(True, description="Send invitation emails to new users"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Bulk import users from a list.
+    Only admins and superadmins can bulk import users.
+    """
+    try:
+        results = user_service.bulk_import_users(
+            db,
+            users_data=user_data,
+            send_invitations=send_invitations,
+            imported_by=current_user.id
+        )
+        
+        return {
+            "total_processed": len(user_data),
+            "successful_imports": len(results["successful"]),
+            "failed_imports": len(results["failed"]),
+            "successful_users": results["successful"],
+            "failed_users": results["failed"]
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error bulk importing users: {str(e)}"
+        )
+
+@router.get("/{user_id}/profile-completeness")
+async def get_profile_completeness(
+    user_id: UUID = Path(..., description="User ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get user profile completeness score and suggestions.
+    Users can check their own profile, admins can check any profile.
+    """
+    # Check permissions
+    if not check_resource_ownership(user_id, current_user, allow_admin=True):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this user profile"
+        )
+    
+    try:
+        completeness = user_service.get_profile_completeness(db, user_id=user_id)
+        return completeness
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error calculating profile completeness: {str(e)}"
+        )
+
+@router.post("/{user_id}/send-verification-email")
+async def send_verification_email(
+    user_id: UUID = Path(..., description="User ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Send email verification to user.
+    Users can request for their own email, admins can send to any user.
+    """
+    # Check permissions
+    if not check_resource_ownership(user_id, current_user, allow_admin=True):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to send verification email for this user"
+        )
+    
+    try:
+        success = user_service.send_verification_email(
+            db,
+            user_id=user_id,
+            requested_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        return {"message": "Verification email sent successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error sending verification email: {str(e)}"
+        )
+
+@router.get("/{user_id}/roles-permissions")
+async def get_user_roles_and_permissions(
+    user_id: UUID = Path(..., description="User ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get user roles and permissions breakdown.
+    Only admins and superadmins can view user permissions.
+    """
+    try:
+        permissions = user_service.get_user_permissions(db, user_id=user_id)
+        if not permissions:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        return permissions
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving user permissions: {str(e)}"
+        )
+
+@router.put("/{user_id}/role")
+async def update_user_role(
+    user_id: UUID = Path(..., description="User ID"),
+    new_role: UserRole = Query(..., description="New user role"),
+    reason: Optional[str] = Query(None, description="Reason for role change"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update user role.
+    Only admins and superadmins can change user roles.
+    """
+    try:
+        success = user_service.update_user_role(
+            db,
+            user_id=user_id,
+            new_role=new_role,
+            reason=reason,
+            updated_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found"
+            )
+        return {"message": f"User role updated to {new_role} successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating user role: {str(e)}"
+        )
+
+@router.get("/{user_id}/statistics")
+async def get_user_statistics(
+    user_id: UUID = Path(..., description="User ID"),
+    start_date: Optional[str] = Query(None, description="Start date for statistics"),
+    end_date: Optional[str] = Query(None, description="End date for statistics"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get user-specific statistics and metrics.
+    Users can view their own stats, admins can view any user's stats.
+    """
+    # Check permissions
+    if not check_resource_ownership(user_id, current_user, allow_admin=True):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this user's statistics"
+        )
+    
+    try:
+        stats = user_service.get_user_statistics(
+            db,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date
+        )
+        return stats
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving user statistics: {str(e)}"
+        )

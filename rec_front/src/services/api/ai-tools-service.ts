@@ -160,6 +160,29 @@ export const aiToolsService = {
       console.error('Error generating candidate feedback:', error);
       throw error;
     }
+  },
+
+  // CV File Analysis (New Method)
+  analyzeCvFile: async (
+    file: File, 
+    onUploadProgress?: (progressEvent: any) => void
+  ): Promise<{cv_analysis: CVAnalysisResponse, job_matches: JobMatchResponseItem[], file_info: any}> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await apiClient.post('/ai-tools/analyze-cv-file', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        onUploadProgress: onUploadProgress
+      });
+      
+      return response.data;
+    } catch (error) {
+      console.error('Error analyzing CV file:', error);
+      throw error;
+    }
   }
 };
 

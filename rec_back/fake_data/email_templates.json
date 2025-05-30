@@ -7,7 +7,7 @@
   {
     "id": "interview_invitation",
     "subject": "Interview Invitation: {{job_title}} at {{company_name}}",
-    "template": "Dear {{candidate_name}},\n\nWe're pleased to inform you that after reviewing your application for the {{job_title}} position at {{company_name}}, we would like to invite you for an interview.\n\nYour profile has shown impressive strengths in the following areas:\n{{cv_analysis}}\n\nWhich particularly align with this role's requirements for:\n{{matching_skills}}\n\nCould you please let us know your availability for an interview in the coming week? The interview will last approximately 45 minutes and will be conducted via video conference.\n\nWe look forward to discussing your qualifications and experience in more detail.\n\nBest regards,\n{{consultant_name}}\nRecruitment Consultant\nRecrutementPlus"
+    "template": "Dear {{candidate_name}},\n\nWe're pleased to inform you that after reviewing your application for the {{job_title}} position at {{company_name}}, we would like to invite you for an interview.\n\nYour profile has shown impressive strengths in the following areas:\n{{cv_analysis}}\n\nWhich particularly align with this role's requirements for:\n{{matching_skills}}\n\nCould you please let us know your availability for an interview in the coming week? The interview will last approximately 45 minutes and will be conducted via {{interview_format}}.\n\nWe look forward to discussing your qualifications and experience in more detail.\n\nBest regards,\n{{consultant_name}}\nRecruitment Consultant\nRecrutementPlus"
   },
   {
     "id": "application_rejected",
@@ -38,5 +38,10 @@
     "id": "feedback_request",
     "subject": "Feedback Request: Your Recent Interview with {{company_name}}",
     "template": "Dear {{candidate_name}},\n\nI hope this email finds you well. I wanted to follow up regarding your recent interview for the {{job_title}} position at {{company_name}} which took place on {{interview_date}}.\n\nWe'd appreciate your feedback on the interview process to help us improve our services. Could you please share:\n\n1. How would you rate the overall interview experience (on a scale of 1-5)?\n2. Was the job description aligned with what was discussed during the interview?\n3. Did you feel adequately prepared for the interview based on the information we provided?\n4. Is there any additional information or support you would have liked from our team?\n\nAlso, please let me know if you have any questions or concerns about the position or next steps in the process. We're expecting feedback from {{company_name}} soon and will update you as soon as we hear from them.\n\nThank you for your time and cooperation.\n\nBest regards,\n{{consultant_name}}\nRecruitment Consultant\nRecrutementPlus\nPhone: {{consultant_phone}}"
+  },
+  {
+    "id": "interview_reminder",
+    "subject": "Reminder: Your Interview for {{job_title}} at {{company_name}} Tomorrow",
+    "template": "Dear {{candidate_name}},\n\nThis is a friendly reminder that your interview for the {{job_title}} position at {{company_name}} is scheduled for tomorrow, {{interview_date}} at {{interview_time}}.\n\nInterview Details:\n- Format: {{interview_format}}\n- {{if_video_link}}Meeting Link: {{video_link}}{{/if_video_link}}\n- {{if_location}}Location: {{interview_location}}{{/if_location}}\n- Duration: Approximately 45 minutes\n\nReminder of what to prepare:\n- Review the job description and your application\n- Be prepared to discuss your experience with {{key_skills_focus}}\n- Have some questions ready about the role and company\n- If it's a video interview, please test your equipment in advance\n\nIf you need to reschedule or have any last-minute questions, please contact me as soon as possible.\n\nGood luck with your interview! I'm confident you will do well.\n\nBest regards,\n{{consultant_name}}\nRecruitment Consultant\nRecrutementPlus\nPhone: {{consultant_phone}}"
   }
 ]

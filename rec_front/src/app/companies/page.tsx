@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser } from '@/store/useAuthStore';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -25,7 +25,7 @@ type GroupBy = 'none' | 'industry' | 'status';
 // Enhanced CompaniesPage component with premium features
 const CompaniesPage = () => {
   const { colors, theme } = useTheme();
-  const { user } = useAuth();
+  const user = useAuthStore(selectUser);
   const [searchTerm, setSearchTerm] = useState('');
   const [industryFilter, setIndustryFilter] = useState('all');
   const [view, setView] = useState<'grid' | 'list' | 'kanban'>('grid');

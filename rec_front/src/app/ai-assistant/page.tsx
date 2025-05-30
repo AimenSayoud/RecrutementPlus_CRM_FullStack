@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser } from '@/store/useAuthStore';
 import { useDataStore } from '@/store/useDataStore';
 // Import services from new services folder structure
 import { openai } from '@/services';
@@ -40,7 +40,7 @@ interface Message {
 
 const AiAssistantPage = () => {
   const { colors, theme } = useTheme();
-  const { user } = useAuth();
+  const user = useAuthStore(selectUser);
 
   // Use the Zustand store
   const {

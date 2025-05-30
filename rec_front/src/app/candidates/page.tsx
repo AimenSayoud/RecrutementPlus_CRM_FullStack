@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser } from '@/store/useAuthStore';
 import { apiService } from '@/lib';
 import { useApiQuery } from '@/hooks/useApiQuery';
 import { Candidate } from '@/types';
@@ -170,7 +170,7 @@ const ViewModeSwitcher: React.FC<ViewModeSwitcherProps> = ({
 
 const CandidatesPage = () => {
   const { colors, theme } = useTheme();
-  const { user } = useAuth();
+  const user = useAuthStore(selectUser);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [searchTerm, setSearchTerm] = useState('');
   const [filters, setFilters] = useState<FilterState>({

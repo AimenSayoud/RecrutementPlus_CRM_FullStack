@@ -3,14 +3,14 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectLogin } from '@/store/useAuthStore';
 import { useTheme } from '@/app/context/ThemeContext';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const { login } = useAuth();
+  const login = useAuthStore(selectLogin);
   const { colors } = useTheme();
   const router = useRouter();
 

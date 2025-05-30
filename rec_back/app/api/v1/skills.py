@@ -1,287 +1,585 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional, Dict, Any
-import json
-from pathlib import Path
-from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from sqlalchemy.orm import Session
+from typing import Optional, List, Dict, Any
+from uuid import UUID
+
+from app.api.v1.deps import (
+    get_database, get_current_active_user, get_admin_user,
+    get_optional_current_user, get_pagination_params, PaginationParams,
+    get_common_filters, CommonFilters
+)
+from app.services.skill import skill_service
+from app.schemas.skill import (
+    SkillCreate, SkillUpdate, Skill, SkillWithCategory,
+    SkillCategoryCreate, SkillCategoryUpdate, SkillCategory,
+    SkillSearchFilters, SkillListResponse, SkillCategoryListResponse,
+    SkillStats, CategoryStats
+)
+from app.models.user import User
+from app.models.enums import UserRole
 
 router = APIRouter()
 
-# Helper function to load data
-def load_data(filename):
-    try:
-        file_path = Path(f"fake_data/{filename}")
-        with open(file_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error loading {filename}: {e}")
-        return []
+# ============== SKILLS MANAGEMENT ==============
 
-# Helper function to generate consistent colors based on skill name
-def generate_skill_color(skill_name):
-    return f"#{hash(skill_name) % 0xFFFFFF:06x}"
-
-@router.get("/")
-async def get_skills(
-    category: Optional[str] = None,
-    search: Optional[str] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100)
+@router.get("/", response_model=SkillListResponse)
+async def list_skills(
+    # Search and filtering
+    category_id: Optional[UUID] = Query(None, description="Filter by skill category"),
+    proficiency_level: Optional[str] = Query(None, description="Filter by proficiency level"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    industry: Optional[str] = Query(None, description="Filter by industry relevance"),
+    
+    # Pagination and common filters
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
+    
+    # Authentication (optional for public access)
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_database)
 ):
-    """Get all skills, optionally filtered by category or search term"""
-    skills = load_data("skills.json")
-    
-    # Filter by category if provided (map similar categories)
-    if category:
-        category_lower = category.lower()
-        # Simple mapping of skill categories (in a real app, this would be in the database)
-        tech_categories = ["programming", "technical", "development", "software", "engineering"]
-        design_categories = ["design", "ui", "ux", "graphic"]
-        data_categories = ["data", "analytics", "ml", "ai", "machine learning"]
-        business_categories = ["business", "management", "finance", "marketing"]
+    """
+    List skills with search and filtering.
+    Public endpoint, but authenticated users get additional details.
+    """
+    try:
+        # Build search filters
+        search_filters = SkillSearchFilters(
+            query=filters.q,
+            category_id=category_id,
+            proficiency_level=proficiency_level,
+            is_active=is_active,
+            industry=industry,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            sort_by=filters.sort_by or "name",
+            sort_order=filters.sort_order
+        )
         
-        if category_lower in tech_categories:
-            skill_ids = list(range(1, 30)) + list(range(37, 45)) + [49, 50, 51, 59, 60, 61, 62]
-            skills = [s for s in skills if s["id"] in skill_ids]
-        elif category_lower in design_categories:
-            skill_ids = list(range(45, 49)) + [15]
-            skills = [s for s in skills if s["id"] in skill_ids]
-        elif category_lower in data_categories:
-            skill_ids = [12, 13, 14, 52, 53, 54, 55, 56, 57, 58, 66, 67, 68]
-            skills = [s for s in skills if s["id"] in skill_ids]
-        elif category_lower in business_categories:
-            skill_ids = list(range(63, 66)) + [69, 70]
-            skills = [s for s in skills if s["id"] in skill_ids]
-    
-    # Filter by search term if provided
-    if search:
-        search_lower = search.lower()
-        skills = [s for s in skills if search_lower in s["name"].lower()]
-    
-    # Get total count before pagination
-    total_count = len(skills)
-    
-    # Apply pagination
-    skills = skills[skip:skip + limit]
-    
-    # Convert to format expected by frontend
-    formatted_skills = [
-        {
-            "id": str(skill["id"]),
-            "name": skill["name"],
-            "color": generate_skill_color(skill["name"]),
-            "category": get_skill_category(skill["id"], skill["name"]),
-            "popularity": get_skill_popularity(skill["id"])
-        }
-        for skill in skills
-    ]
-    
-    return {
-        "items": formatted_skills,
-        "totalCount": total_count,
-        "page": skip // limit + 1 if limit > 0 else 1,
-        "pageSize": limit,
-        "pageCount": (total_count + limit - 1) // limit if limit > 0 else 1
-    }
+        # Get additional details for authenticated users
+        include_stats = current_user is not None
+        
+        skills, total = skill_service.get_skills_with_search(
+            db, 
+            filters=search_filters,
+            include_stats=include_stats
+        )
+        
+        return SkillListResponse(
+            skills=skills,
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving skills: {str(e)}"
+        )
 
-@router.get("/{skill_id}")
-async def get_skill(skill_id: str):
-    """Get a specific skill by ID"""
-    skills = load_data("skills.json")
-    skill = next((s for s in skills if str(s["id"]) == skill_id), None)
-    
-    if not skill:
-        raise HTTPException(status_code=404, detail="Skill not found")
-    
-    # Gather related data for the skill
-    candidates = load_data("candidate_profiles.json")
-    jobs = load_data("jobs.json")
-    
-    # Count candidates with this skill
-    candidates_with_skill = [c for c in candidates if int(skill_id) in c.get("skill_ids", [])]
-    candidate_count = len(candidates_with_skill)
-    
-    # Count jobs requiring this skill
-    jobs_with_skill = [j for j in jobs if int(skill_id) in j.get("skills", [])]
-    job_count = len(jobs_with_skill)
-    
-    return {
-        "id": str(skill["id"]),
-        "name": skill["name"],
-        "color": generate_skill_color(skill["name"]),
-        "category": get_skill_category(skill["id"], skill["name"]),
-        "popularity": get_skill_popularity(skill["id"]),
-        "candidateCount": candidate_count,
-        "jobCount": job_count,
-        "related_skills": get_related_skills(int(skill_id))
-    }
+@router.post("/", response_model=Skill)
+async def create_skill(
+    skill_data: SkillCreate,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Create a new skill.
+    Only admins can create skills.
+    """
+    try:
+        skill = skill_service.create_skill(
+            db,
+            skill_data=skill_data,
+            created_by=current_user.id
+        )
+        return skill
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating skill: {str(e)}"
+        )
 
-@router.post("/")
-async def create_skill(skill: Dict[str, Any]):
-    """Create a new skill (mock implementation)"""
-    skills = load_data("skills.json")
-    
-    # Generate new ID (max existing ID + 1)
-    new_id = max([s["id"] for s in skills], default=0) + 1
-    
-    # Create new skill
-    new_skill = {
-        "id": str(new_id),
-        "name": skill["name"],
-        "color": skill.get("color", generate_skill_color(skill["name"])),
-        "category": skill.get("category", "Other"),
-        "popularity": 0
-    }
-    
-    return new_skill
+@router.get("/categories", response_model=SkillCategoryListResponse)
+async def list_skill_categories(
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_database)
+):
+    """
+    List skill categories.
+    Public endpoint with optional filtering.
+    """
+    try:
+        categories, total = skill_service.get_skill_categories_with_search(
+            db,
+            query=filters.q,
+            is_active=is_active,
+            skip=pagination.offset,
+            limit=pagination.page_size
+        )
+        
+        return SkillCategoryListResponse(
+            categories=categories,
+            total=total
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving skill categories: {str(e)}"
+        )
 
-@router.put("/{skill_id}")
-async def update_skill(skill_id: str, skill: Dict[str, Any]):
-    """Update a skill (mock implementation)"""
-    skills = load_data("skills.json")
-    existing = next((s for s in skills if str(s["id"]) == skill_id), None)
-    
-    if not existing:
-        raise HTTPException(status_code=404, detail="Skill not found")
-    
-    # Update skill
-    updated_skill = {
-        "id": skill_id,
-        "name": skill.get("name", existing["name"]),
-        "color": skill.get("color", generate_skill_color(skill.get("name", existing["name"]))),
-        "category": skill.get("category", get_skill_category(int(skill_id), skill.get("name", existing["name"]))),
-        "popularity": get_skill_popularity(int(skill_id))
-    }
-    
-    return updated_skill
+@router.get("/{skill_id}", response_model=SkillWithCategory)
+async def get_skill(
+    skill_id: UUID = Path(..., description="Skill ID"),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get skill details by ID.
+    Public endpoint with additional details for authenticated users.
+    """
+    try:
+        include_stats = current_user is not None
+        
+        skill = skill_service.get_skill_with_details(
+            db, 
+            id=skill_id,
+            include_stats=include_stats
+        )
+        if not skill:
+            raise HTTPException(
+                status_code=404,
+                detail="Skill not found"
+            )
+        
+        return skill
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving skill: {str(e)}"
+        )
+
+@router.put("/{skill_id}", response_model=Skill)
+async def update_skill(
+    skill_update: SkillUpdate,
+    skill_id: UUID = Path(..., description="Skill ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update skill information.
+    Only admins can update skills.
+    """
+    try:
+        updated_skill = skill_service.update_skill(
+            db,
+            skill_id=skill_id,
+            update_data=skill_update,
+            updated_by=current_user.id
+        )
+        if not updated_skill:
+            raise HTTPException(
+                status_code=404,
+                detail="Skill not found"
+            )
+        return updated_skill
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating skill: {str(e)}"
+        )
 
 @router.delete("/{skill_id}")
-async def delete_skill(skill_id: str):
-    """Delete a skill (mock implementation)"""
-    skills = load_data("skills.json")
-    existing = next((s for s in skills if str(s["id"]) == skill_id), None)
-    
-    if not existing:
-        raise HTTPException(status_code=404, detail="Skill not found")
-    
-    # In a real implementation, we would remove from the database
-    # For this mock API, we'll just return success
-    return {"success": True, "message": f"Skill {skill_id} deleted"}
+async def delete_skill(
+    skill_id: UUID = Path(..., description="Skill ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Delete a skill.
+    Only admins can delete skills.
+    """
+    try:
+        success = skill_service.delete_skill(
+            db,
+            skill_id=skill_id,
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Skill not found"
+            )
+        return {"message": "Skill deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting skill: {str(e)}"
+        )
 
-# Helper functions for skill metadata
-
-def get_skill_category(skill_id, skill_name):
-    """Determine the category of a skill based on its ID and name"""
-    name_lower = skill_name.lower()
-    
-    # Programming languages
-    if skill_id in [1, 2, 18, 19, 23, 27, 29, 30, 31, 32]:
-        return "Programming Language"
-    
-    # Frameworks and libraries
-    if skill_id in [3, 10, 13, 21, 22, 24, 28, 33, 34]:
-        return "Framework"
-    
-    # Data
-    if skill_id in [4, 25, 26, 52, 53, 54, 55, 66, 67, 68]:
-        return "Data"
-    
-    # Design
-    if skill_id in [45, 46, 47, 48]:
-        return "Design"
-    
-    # DevOps
-    if skill_id in [9, 11, 16, 17, 35, 36, 37, 38, 39, 40]:
-        return "DevOps"
-    
-    # AI/ML
-    if skill_id in [12, 56, 57, 58]:
-        return "AI & Machine Learning"
-    
-    # Security
-    if skill_id in [49, 50, 51]:
-        return "Security"
-    
-    # Blockchain
-    if skill_id in [59, 60]:
-        return "Blockchain"
-    
-    # IoT & Embedded
-    if skill_id in [61, 62]:
-        return "IoT & Embedded"
-    
-    # Management
-    if skill_id in [63, 64, 65, 69, 70]:
-        return "Management & Soft Skills"
-    
-    # Marketing
-    if skill_id in [5, 6, 7, 8]:
-        return "Marketing"
-    
-    # Default
-    return "Other"
-
-def get_skill_popularity(skill_id):
-    """Calculate the popularity of a skill based on its presence in candidates and jobs"""
-    candidates = load_data("candidate_profiles.json")
-    jobs = load_data("jobs.json")
-    
-    # Count candidates with this skill
-    candidates_with_skill = [c for c in candidates if skill_id in c.get("skill_ids", [])]
-    candidate_count = len(candidates_with_skill)
-    
-    # Count jobs requiring this skill
-    jobs_with_skill = [j for j in jobs if skill_id in j.get("skills", [])]
-    job_count = len(jobs_with_skill)
-    
-    # Calculate popularity (0-100 scale)
-    total_candidates = len(candidates)
-    total_jobs = len(jobs)
-    
-    if total_candidates == 0 or total_jobs == 0:
-        return 0
-    
-    # Weighted score (70% jobs demand, 30% candidate supply)
-    job_score = (job_count / total_jobs) * 100 * 0.7
-    candidate_score = (candidate_count / total_candidates) * 100 * 0.3
-    
-    return min(round(job_score + candidate_score), 100)
-
-def get_related_skills(skill_id):
-    """Find related skills based on co-occurrence in candidates and jobs"""
-    candidates = load_data("candidate_profiles.json")
-    jobs = load_data("jobs.json")
-    skills_data = load_data("skills.json")
-    
-    # Find candidates and jobs with this skill
-    candidates_with_skill = [c for c in candidates if skill_id in c.get("skill_ids", [])]
-    jobs_with_skill = [j for j in jobs if skill_id in j.get("skills", [])]
-    
-    # Collect all co-occurring skills
-    related_skill_ids = {}
-    
-    # From candidates
-    for candidate in candidates_with_skill:
-        for s_id in candidate.get("skill_ids", []):
-            if s_id != skill_id:
-                related_skill_ids[s_id] = related_skill_ids.get(s_id, 0) + 1
-    
-    # From jobs
-    for job in jobs_with_skill:
-        for s_id in job.get("skills", []):
-            if s_id != skill_id:
-                related_skill_ids[s_id] = related_skill_ids.get(s_id, 0) + 2  # Jobs weighted higher
-    
-    # Sort by count and get top 5
-    sorted_related = sorted(related_skill_ids.items(), key=lambda x: x[1], reverse=True)[:5]
-    
-    # Format results
-    skill_lookup = {skill["id"]: skill["name"] for skill in skills_data}
-    
-    return [
-        {
-            "id": str(s_id),
-            "name": skill_lookup.get(s_id, f"Skill-{s_id}"),
-            "color": generate_skill_color(skill_lookup.get(s_id, f"Skill-{s_id}"))
+@router.post("/bulk-import")
+async def bulk_import_skills(
+    skills_data: List[SkillCreate],
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Bulk import skills from a list.
+    Only admins can bulk import skills.
+    """
+    try:
+        results = skill_service.bulk_import_skills(
+            db,
+            skills_data=skills_data,
+            imported_by=current_user.id
+        )
+        
+        return {
+            "total_processed": len(skills_data),
+            "successful_imports": len(results["successful"]),
+            "failed_imports": len(results["failed"]),
+            "duplicate_skills": len(results["duplicates"]),
+            "successful_skills": results["successful"],
+            "failed_skills": results["failed"],
+            "duplicate_skills": results["duplicates"]
         }
-        for s_id, count in sorted_related
-    ]
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error bulk importing skills: {str(e)}"
+        )
+
+# ============== SKILL CATEGORIES ==============
+
+@router.get("/categories", response_model=SkillCategoryListResponse)
+async def list_skill_categories(
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_database)
+):
+    """
+    List skill categories.
+    Public endpoint with additional details for authenticated users.
+    """
+    try:
+        include_stats = current_user is not None
+        
+        categories, total = skill_service.get_skill_categories_with_search(
+            db,
+            query=filters.q,
+            is_active=is_active,
+            skip=pagination.offset,
+            limit=pagination.page_size,
+            include_stats=include_stats
+        )
+        
+        return SkillCategoryListResponse(
+            items=categories,
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            pages=(total + pagination.page_size - 1) // pagination.page_size
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving skill categories: {str(e)}"
+        )
+
+@router.post("/categories", response_model=SkillCategory)
+async def create_skill_category(
+    category_data: SkillCategoryCreate,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Create a new skill category.
+    Only admins can create skill categories.
+    """
+    try:
+        category = skill_service.create_skill_category(
+            db,
+            category_data=category_data,
+            created_by=current_user.id
+        )
+        return category
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating skill category: {str(e)}"
+        )
+
+@router.get("/categories/{category_id}", response_model=SkillCategory)
+async def get_skill_category(
+    category_id: UUID = Path(..., description="Skill category ID"),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get skill category details by ID.
+    Public endpoint with additional details for authenticated users.
+    """
+    try:
+        include_stats = current_user is not None
+        
+        category = skill_service.get_skill_category_with_details(
+            db, 
+            id=category_id,
+            include_stats=include_stats
+        )
+        if not category:
+            raise HTTPException(
+                status_code=404,
+                detail="Skill category not found"
+            )
+        
+        return category
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving skill category: {str(e)}"
+        )
+
+@router.put("/categories/{category_id}", response_model=SkillCategory)
+async def update_skill_category(
+    category_update: SkillCategoryUpdate,
+    category_id: UUID = Path(..., description="Skill category ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update skill category information.
+    Only admins can update skill categories.
+    """
+    try:
+        updated_category = skill_service.update_skill_category(
+            db,
+            category_id=category_id,
+            update_data=category_update,
+            updated_by=current_user.id
+        )
+        if not updated_category:
+            raise HTTPException(
+                status_code=404,
+                detail="Skill category not found"
+            )
+        return updated_category
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating skill category: {str(e)}"
+        )
+
+@router.delete("/categories/{category_id}")
+async def delete_skill_category(
+    category_id: UUID = Path(..., description="Skill category ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Delete a skill category.
+    Only admins can delete skill categories.
+    """
+    try:
+        success = skill_service.delete_skill_category(
+            db,
+            category_id=category_id,
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Skill category not found"
+            )
+        return {"message": "Skill category deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting skill category: {str(e)}"
+        )
+
+# ============== SKILL ANALYTICS & INSIGHTS ==============
+
+@router.get("/trending", response_model=List[SkillStats])
+async def get_trending_skills(
+    time_period: str = Query("month", description="Time period: week, month, quarter, year"),
+    limit: int = Query(10, description="Number of trending skills to return"),
+    category_id: Optional[UUID] = Query(None, description="Filter by skill category"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get trending skills based on job postings and candidate profiles.
+    Authenticated users can view trending skills.
+    """
+    try:
+        trending_skills = skill_service.get_trending_skills(
+            db,
+            time_period=time_period,
+            limit=limit,
+            category_id=category_id
+        )
+        return trending_skills
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving trending skills: {str(e)}"
+        )
+
+@router.get("/demand-analysis")
+async def get_skills_demand_analysis(
+    start_date: Optional[str] = Query(None, description="Start date for analysis"),
+    end_date: Optional[str] = Query(None, description="End date for analysis"),
+    location: Optional[str] = Query(None, description="Filter by location"),
+    industry: Optional[str] = Query(None, description="Filter by industry"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get comprehensive skills demand analysis.
+    Only admins can view demand analysis.
+    """
+    try:
+        analysis = skill_service.get_skills_demand_analysis(
+            db,
+            start_date=start_date,
+            end_date=end_date,
+            location=location,
+            industry=industry
+        )
+        return analysis
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error performing skills demand analysis: {str(e)}"
+        )
+
+@router.get("/recommendations")
+async def get_skill_recommendations(
+    user_id: Optional[UUID] = Query(None, description="Get recommendations for specific user"),
+    job_id: Optional[UUID] = Query(None, description="Get recommendations for job requirements"),
+    limit: int = Query(5, description="Number of recommendations to return"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get skill recommendations based on user profile or job requirements.
+    Authenticated users can get skill recommendations.
+    """
+    try:
+        # If no user_id provided, use current user for candidates
+        if not user_id and current_user.role == UserRole.CANDIDATE:
+            user_id = current_user.id
+        
+        recommendations = skill_service.get_skill_recommendations(
+            db,
+            user_id=user_id,
+            job_id=job_id,
+            limit=limit
+        )
+        return recommendations
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating skill recommendations: {str(e)}"
+        )
+
+@router.get("/gap-analysis")
+async def perform_skill_gap_analysis(
+    candidate_id: Optional[UUID] = Query(None, description="Candidate ID for gap analysis"),
+    job_id: Optional[UUID] = Query(None, description="Job ID for requirements comparison"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Perform skill gap analysis between candidate and job requirements.
+    Candidates can analyze their own gaps, consultants/admins can analyze any.
+    """
+    try:
+        # If no candidate_id provided and user is candidate, use current user
+        if not candidate_id and current_user.role == UserRole.CANDIDATE:
+            candidate_id = current_user.candidate_profile.id if hasattr(current_user, 'candidate_profile') else None
+        
+        if not candidate_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Candidate ID is required for skill gap analysis"
+            )
+        
+        gap_analysis = skill_service.perform_skill_gap_analysis(
+            db,
+            candidate_id=candidate_id,
+            job_id=job_id
+        )
+        return gap_analysis
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error performing skill gap analysis: {str(e)}"
+        )
+
+@router.get("/market-insights")
+async def get_skill_market_insights(
+    skill_ids: Optional[List[UUID]] = Query(None, description="Specific skills to analyze"),
+    location: Optional[str] = Query(None, description="Filter by location"),
+    time_period: str = Query("quarter", description="Time period for insights"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get market insights for specific skills including salary trends and demand.
+    Authenticated users can view market insights.
+    """
+    try:
+        insights = skill_service.get_skill_market_insights(
+            db,
+            skill_ids=skill_ids,
+            location=location,
+            time_period=time_period
+        )
+        return insights
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving skill market insights: {str(e)}"
+        )
+
+@router.get("/search/autocomplete")
+async def skill_search_autocomplete(
+    q: str = Query(..., description="Search query for autocomplete"),
+    limit: int = Query(10, description="Maximum number of suggestions"),
+    category_id: Optional[UUID] = Query(None, description="Filter by skill category"),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get skill search autocomplete suggestions.
+    Public endpoint for search functionality.
+    """
+    try:
+        suggestions = skill_service.get_skill_autocomplete_suggestions(
+            db,
+            query=q,
+            limit=limit,
+            category_id=category_id
+        )
+        return {"suggestions": suggestions}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating autocomplete suggestions: {str(e)}"
+        )

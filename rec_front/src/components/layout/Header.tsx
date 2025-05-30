@@ -3,12 +3,13 @@
 
 import React from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser, selectLogout } from '@/store/useAuthStore';
 import { motion } from 'framer-motion';
 
 const Header = () => {
   const { theme, toggleTheme, colors } = useTheme();
-  const { user, logout } = useAuth();
+  const user = useAuthStore(selectUser);
+  const logout = useAuthStore(selectLogout);
 
   const iconVariants = {
     initial: { scale: 0.8, opacity: 0 },

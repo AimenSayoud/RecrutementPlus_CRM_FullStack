@@ -5,7 +5,7 @@ import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser, selectCanAccess } from '@/store/useAuthStore';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
 
@@ -19,7 +19,8 @@ interface SidebarItem {
 const Sidebar = () => {
   const pathname = usePathname();
   const { theme, colors } = useTheme();
-  const { user, canAccess } = useAuth();
+  const user = useAuthStore(selectUser);
+  const canAccess = useAuthStore(selectCanAccess);
   
   // Animation variants
   const sidebarVariants = {

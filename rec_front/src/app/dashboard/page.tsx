@@ -3,7 +3,7 @@
 
 import React from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser } from '@/store/useAuthStore';
 import Card from '@/components/ui/Card';
 import { motion } from 'framer-motion';
 //import Badge from '@/components/ui/Badge';
@@ -22,7 +22,7 @@ type BadgeVariant = 'primary' | 'secondary' | 'success' | 'danger' | 'warning' |
 
 const DashboardPage = () => {
   const { colors, theme } = useTheme();
-  const { user } = useAuth();
+  const user = useAuthStore(selectUser);
   
   // More refined animations
   const containerVariants = {

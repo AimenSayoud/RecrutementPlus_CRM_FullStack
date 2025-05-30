@@ -1,807 +1,785 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Query
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-from pydantic import BaseModel
-from uuid import UUID, uuid4
-import json
-import os
-from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Query, Path, UploadFile, File
+from sqlalchemy.orm import Session
+from typing import Optional, List, Dict, Any
+from uuid import UUID
 
-# Load fake data
-current_dir = Path(__file__).parent.parent.parent.parent
-fake_conversations_path = current_dir / "fake_data" / "conversations.json"
-fake_messages_path = current_dir / "fake_data" / "messages.json"
+from app.api.v1.deps import (
+    get_database, get_current_active_user, get_admin_user,
+    get_pagination_params, PaginationParams,
+    get_common_filters, CommonFilters
+)
+from app.services.messaging import messaging_service
+from app.schemas.messaging import (
+    ConversationCreate, ConversationUpdate, Conversation, ConversationWithDetails,
+    MessageCreate, MessageUpdate, Message, MessageWithDetails,
+    MessageAttachmentCreate, MessageAttachment,
+    EmailTemplateCreate, EmailTemplateUpdate, EmailTemplate, EmailTemplateWithStats,
+    ConversationSearchFilters, MessageSearchFilters, EmailTemplateSearchFilters,
+    ConversationListResponse, MessageListResponse, EmailTemplateListResponse,
+    SendMessageRequest, CreateConversationRequest, MessageReactionRequest, MarkAsReadRequest
+)
+from app.models.user import User
+from app.models.enums import UserRole, MessageType, ConversationType
 
-# Load conversations
-with open(fake_conversations_path, "r") as f:
-    FAKE_CONVERSATIONS = json.load(f)
-
-# Load messages
-with open(fake_messages_path, "r") as f:
-    FAKE_MESSAGES = json.load(f)
-
-# Helper to convert conversation from DB format to API format
-def format_conversation(conv: Dict[str, Any], include_is_starred: bool = True, include_has_attachments: bool = True) -> Dict[str, Any]:
-    # Get participants
-    participants = []
-    for p in conv["participants"]:
-        # Find user in some fake user data to get more info
-        # In a real implementation, this would query the database
-        participant = {
-            "id": str(p["user_id"]),
-            "type": p["role"],  # admin, member, etc.
-            "name": f"User {p['user_id']}",  # Would be fetched from users table
-            "avatar": None  # Would be fetched from users table
-        }
-        participants.append(participant)
-    
-    # Find last message
-    last_message = None
-    messages_for_conv = [m for m in FAKE_MESSAGES if m["conversation_id"] == conv["id"]]
-    if messages_for_conv:
-        # Sort by created_at to find the newest
-        last_msg = sorted(messages_for_conv, key=lambda x: x["created_at"], reverse=True)[0]
-        sender_name = f"User {last_msg['sender_id']}"  # Would be fetched from users table
-        
-        last_message = {
-            "content": last_msg["content"],
-            "sender": sender_name,
-            "timestamp": last_msg["created_at"],
-            "status": last_msg["status"]
-        }
-    
-    # Get unread count (messages where status is not "read")
-    unread_count = sum(1 for m in messages_for_conv if m["status"] != "read")
-    
-    # Format response
-    response = {
-        "id": str(conv["id"]),
-        "title": conv["title"],
-        "participants": participants,
-        "type": "group" if conv["is_group"] else "individual",
-        "last_message": last_message,
-        "unread_count": unread_count,
-        "created_at": conv["created_at"],
-        "updated_at": conv["updated_at"],
-        "associated_entities": []
-    }
-    
-    # Add optional fields used by the frontend
-    if include_is_starred:
-        response["is_starred"] = False  # This would be user-specific in a real implementation
-    
-    if include_has_attachments:
-        # Check if any messages in this conversation have attachments
-        has_attachments = any(len(m.get("attachments", [])) > 0 for m in messages_for_conv)
-        response["has_attachments"] = has_attachments
-    
-    return response
-
-# Helper to convert message from DB format to API format
-def format_message(msg: Dict[str, Any]) -> Dict[str, Any]:
-    # Find sender and format
-    sender = {
-        "id": str(msg["sender_id"]),
-        "type": "admin",  # Would be determined from DB
-        "name": f"User {msg['sender_id']}",  # Would be fetched from users table
-        "avatar": None  # Would be fetched from users table
-    }
-    
-    # Format recipients
-    recipients = []
-    # In a real implementation, we'd query the recipients table
-    # For now, we'll create dummy recipients
-    
-    # Format attachments
-    attachments = []
-    for attachment in msg.get("attachments", []):
-        attachments.append({
-            "id": str(attachment.get("id")),
-            "name": attachment.get("file_name", ""),
-            "file_type": attachment.get("file_type", "application/octet-stream"),
-            "file_size": attachment.get("file_size", 0),
-            "url": f"/api/v1/attachments/{attachment.get('id')}",
-            "storage_path": attachment.get("storage_path", ""),
-            # Add these required fields
-            "type": "file",  # Default to 'file' or derive from file_type
-            "size": attachment.get("file_size", 0)  # Use the same value as file_size
-        })
-    
-    # Format entity references
-    entity_references = []
-    for entity in msg.get("entity_references", []):
-        entity_references.append({
-            "type": entity.get("type"),
-            "id": str(entity.get("id")),
-            "name": entity.get("name", "")
-        })
-    
-    return {
-        "id": str(msg["id"]),
-        "conversation_id": str(msg["conversation_id"]),
-        "content": msg["content"],
-        "sender": sender,
-        "recipients": recipients,  # Would be populated from DB
-        "attachments": attachments,
-        "entity_references": entity_references,
-        "status": msg["status"],
-        "created_at": msg["created_at"],
-        "updated_at": msg.get("updated_at", msg["created_at"]),
-        "type": msg.get("type", "text"),
-        "template_id": msg.get("template_id"),
-        # Add the required priority field
-        "priority": msg.get("priority", "normal")  # Default to 'normal'
-    }
-# Models for messaging
-class ParticipantBase(BaseModel):
-    id: str
-    type: str  # 'admin', 'candidate', 'employer', 'consultant', 'system'
-    name: str
-    avatar: Optional[str] = None
-
-class EntityReferenceBase(BaseModel):
-    type: str  # 'job', 'application', 'company', 'candidate'
-    id: str
-    name: str
-
-class AttachmentBase(BaseModel):
-    id: str
-    type: str  # 'file', 'image', 'document'
-    name: str
-    url: str
-    size: int
-    mime_type: Optional[str] = None
-
-class MessageCreate(BaseModel):
-    content: str
-    sender: ParticipantBase
-    recipients: List[ParticipantBase]
-    attachments: Optional[List[AttachmentBase]] = None
-    referenced_entities: Optional[List[EntityReferenceBase]] = None
-    scheduled_for: Optional[datetime] = None
-    priority: str = "normal"  # 'normal', 'urgent'
-
-class MessageUpdate(BaseModel):
-    status: Optional[str] = None  # 'draft', 'sending', 'sent', 'delivered', 'read', 'failed'
-    flags: Optional[List[str]] = None  # 'flagged', 'followup', 'archived'
-
-class Message(BaseModel):
-    id: str
-    conversation_id: str
-    content: str
-    sender: ParticipantBase
-    recipients: List[ParticipantBase]
-    attachments: Optional[List[AttachmentBase]] = None
-    referenced_entities: Optional[List[EntityReferenceBase]] = None
-    status: str  # 'draft', 'sending', 'sent', 'delivered', 'read', 'failed'
-    created_at: datetime
-    scheduled_for: Optional[datetime] = None
-    priority: str  # 'normal', 'urgent'
-    flags: Optional[List[str]] = None  # 'flagged', 'followup', 'archived'
-
-class ConversationCreate(BaseModel):
-    title: Optional[str] = None
-    participants: List[ParticipantBase]
-    type: str  # 'individual', 'group'
-    associated_entities: Optional[List[EntityReferenceBase]] = None
-
-class ConversationUpdate(BaseModel):
-    title: Optional[str] = None
-    participants: Optional[List[ParticipantBase]] = None
-    associated_entities: Optional[List[EntityReferenceBase]] = None
-
-class LastMessage(BaseModel):
-    content: str
-    sender: str
-    timestamp: datetime
-    status: str  # 'sent', 'delivered', 'read', 'failed'
-
-class Conversation(BaseModel):
-    id: str
-    title: Optional[str] = None
-    participants: List[ParticipantBase]
-    type: str  # 'individual', 'group'
-    last_message: Optional[LastMessage] = None
-    unread_count: int
-    created_at: datetime
-    updated_at: datetime
-    associated_entities: Optional[List[EntityReferenceBase]] = None
-
-class MessageTemplateCreate(BaseModel):
-    name: str
-    content: str
-    category: str
-    variables: Optional[List[str]] = None
-
-class MessageTemplateUpdate(BaseModel):
-    name: Optional[str] = None
-    content: Optional[str] = None
-    category: Optional[str] = None
-    variables: Optional[List[str]] = None
-
-class MessageTemplate(BaseModel):
-    id: str
-    name: str
-    content: str
-    category: str
-    variables: Optional[List[str]] = None
-    created_at: datetime
-    updated_at: datetime
-
-class NotificationPreferencesUpdate(BaseModel):
-    in_app: Optional[bool] = None
-    email: Optional[bool] = None
-    email_digest: Optional[str] = None  # 'never', 'daily', 'weekly'
-    sms: Optional[bool] = None
-    do_not_disturb_start: Optional[str] = None  # HH:MM format
-    do_not_disturb_end: Optional[str] = None  # HH:MM format
-
-class NotificationPreferences(BaseModel):
-    user_id: str
-    in_app: bool = True
-    email: bool = True
-    email_digest: str = "never"  # 'never', 'daily', 'weekly'
-    sms: bool = False
-    do_not_disturb_start: Optional[str] = None  # HH:MM format
-    do_not_disturb_end: Optional[str] = None  # HH:MM format
-
-class MarkMessagesReadRequest(BaseModel):
-    message_ids: List[str]
-
-# Create router
 router = APIRouter()
 
-# Conversations endpoints
-@router.get("/conversations", response_model=List[Conversation])
-async def get_conversations(
-    user_id: str,
-    skip: int = 0, 
-    limit: int = 100,
-    unread_only: bool = False,
-    entity_type: Optional[str] = None,
-    entity_id: Optional[str] = None
+# ============== CONVERSATIONS ==============
+
+@router.get("/conversations", response_model=ConversationListResponse)
+async def list_conversations(
+    # Search and filtering
+    conversation_type: Optional[ConversationType] = Query(None, description="Filter by conversation type"),
+    is_archived: Optional[bool] = Query(None, description="Filter by archived status"),
+    participant_id: Optional[UUID] = Query(None, description="Filter by participant ID"),
+    
+    # Pagination and common filters
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
+    
+    # Authentication
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Get conversations for the current user, with optional filtering.
-    
-    - user_id: ID of the current user
-    - skip: Number of records to skip (pagination)
-    - limit: Maximum number of records to return (pagination)
-    - unread_only: If true, only return conversations with unread messages
-    - entity_type: Filter by associated entity type (e.g., 'job', 'candidate')
-    - entity_id: Filter by associated entity ID
+    List user's conversations with filtering.
+    Users can only see conversations they participate in.
     """
-    # Filter conversations where the user is a participant
-    user_conversations = []
-    for conv in FAKE_CONVERSATIONS:
-        # Check if user is a participant
-        is_participant = any(p["user_id"] == int(user_id) for p in conv["participants"])
-        if not is_participant:
-            continue
-            
-        # Apply entity type filter if specified
-        if entity_type and conv.get("entity_type") != entity_type:
-            continue
-            
-        # Apply entity ID filter if specified
-        if entity_id and str(conv.get("entity_id")) != entity_id:
-            continue
-            
-        # Apply unread filter if specified
-        if unread_only:
-            messages_for_conv = [m for m in FAKE_MESSAGES if m["conversation_id"] == conv["id"]]
-            unread_count = sum(1 for m in messages_for_conv if m["status"] != "read" and m["sender_id"] != int(user_id))
-            if unread_count == 0:
-                continue
-                
-        # Add to results
-        user_conversations.append(format_conversation(conv))
-    
-    # Apply pagination
-    start = min(skip, len(user_conversations))
-    end = min(skip + limit, len(user_conversations))
-    
-    return user_conversations[start:end]
+    try:
+        # Build search filters
+        search_filters = ConversationSearchFilters(
+            participant_id=current_user.id,  # Always filter by current user
+            type=conversation_type,
+            is_archived=is_archived,
+            query=filters.q,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            sort_by=filters.sort_by or "last_message_at",
+            sort_order=filters.sort_order
+        )
+        
+        conversations, total = messaging_service.get_conversations_with_search(
+            db, filters=search_filters
+        )
+        
+        return ConversationListResponse(
+            conversations=conversations,
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving conversations: {str(e)}"
+        )
 
-@router.post("/conversations", response_model=Conversation, status_code=status.HTTP_201_CREATED)
+@router.post("/conversations", response_model=Conversation)
 async def create_conversation(
-    conversation: ConversationCreate
+    conversation_data: CreateConversationRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
     Create a new conversation.
+    Any authenticated user can create conversations.
     """
-    # In a real implementation, this would insert into the database
-    # For now, we'll create a fake conversation and return it
-    new_id = str(uuid4())
-    now = datetime.now().isoformat()
-    
-    # Create new conversation object
-    new_conversation = {
-        "id": new_id,
-        "title": conversation.title or "",
-        "created_at": now,
-        "updated_at": now,
-        "last_message_at": now,
-        "is_group": conversation.type == "group",
-        "entity_type": None,
-        "entity_id": None,
-        "participants": [
-            {
-                "id": i+1,
-                "user_id": int(p.id),
-                "role": p.type,
-                "joined_at": now,
-                "last_read_at": now,
-                "status": "active"
-            }
-            for i, p in enumerate(conversation.participants)
-        ]
-    }
-    
-    # In a real implementation, we would save this to the database
-    # and set associated entities
-    
-    return format_conversation(new_conversation)
+    try:
+        conversation = messaging_service.create_conversation(
+            db,
+            request=conversation_data,
+            created_by=current_user.id
+        )
+        return conversation
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating conversation: {str(e)}"
+        )
 
-@router.get("/conversations/{conversation_id}", response_model=Conversation)
+@router.get("/conversations/{conversation_id}", response_model=ConversationWithDetails)
 async def get_conversation(
-    conversation_id: str
+    conversation_id: UUID = Path(..., description="Conversation ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Get a specific conversation by ID.
+    Get conversation details.
+    Only participants can view conversation details.
     """
-    # Find the conversation in our fake data
-    for conv in FAKE_CONVERSATIONS:
-        if str(conv["id"]) == conversation_id:
-            return format_conversation(conv)
-    
-    # If not found, return 404
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Conversation with ID {conversation_id} not found"
-    )
+    try:
+        # Check if user is participant
+        is_participant = messaging_service.is_conversation_participant(
+            db, conversation_id=conversation_id, user_id=current_user.id
+        )
+        
+        if not is_participant and current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to this conversation"
+            )
+        
+        conversation = messaging_service.get_conversation_with_details(
+            db, id=conversation_id
+        )
+        if not conversation:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found"
+            )
+        
+        return conversation
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving conversation: {str(e)}"
+        )
 
 @router.put("/conversations/{conversation_id}", response_model=Conversation)
 async def update_conversation(
-    conversation_id: str,
-    conversation_update: ConversationUpdate
+    conversation_update: ConversationUpdate,
+    conversation_id: UUID = Path(..., description="Conversation ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Update an existing conversation.
+    Update conversation details.
+    Only participants can update conversation details.
     """
-    # Find the conversation in our fake data
-    for i, conv in enumerate(FAKE_CONVERSATIONS):
-        if str(conv["id"]) == conversation_id:
-            # In a real implementation, we would update the database
-            # For now, we'll just update our in-memory data
-            if conversation_update.title is not None:
-                FAKE_CONVERSATIONS[i]["title"] = conversation_update.title
-                
-            # Update timestamp
-            FAKE_CONVERSATIONS[i]["updated_at"] = datetime.now().isoformat()
-            
-            return format_conversation(FAKE_CONVERSATIONS[i])
-    
-    # If not found, return 404
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Conversation with ID {conversation_id} not found"
-    )
+    try:
+        # Check if user is participant
+        is_participant = messaging_service.is_conversation_participant(
+            db, conversation_id=conversation_id, user_id=current_user.id
+        )
+        
+        if not is_participant and current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to update this conversation"
+            )
+        
+        updated_conversation = messaging_service.update_conversation(
+            db,
+            conversation_id=conversation_id,
+            update_data=conversation_update,
+            updated_by=current_user.id
+        )
+        if not updated_conversation:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found"
+            )
+        return updated_conversation
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating conversation: {str(e)}"
+        )
 
-@router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
-    conversation_id: str
+    conversation_id: UUID = Path(..., description="Conversation ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
     Delete a conversation.
+    Only conversation creator or admins can delete conversations.
     """
-    # In a real implementation, this would be a soft delete that marks the conversation as archived
-    # For our mock implementation, we'll just filter it out in our function return results
-    
-    # Check if the conversation exists
-    if not any(str(conv["id"]) == conversation_id for conv in FAKE_CONVERSATIONS):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conversation with ID {conversation_id} not found"
-        )
-    
-    # No actual deletion since we're using static data
-    return None
-
-# Messages endpoints
-@router.get("/conversations/{conversation_id}/messages", response_model=List[Message])
-async def get_messages(
-    conversation_id: str,
-    skip: int = 0,
-    limit: int = 50,
-    before: Optional[datetime] = None
-):
-    """
-    Get messages for a specific conversation.
-    
-    - conversation_id: ID of the conversation
-    - skip: Number of records to skip (pagination)
-    - limit: Maximum number of records to return (pagination)
-    - before: Only return messages created before this timestamp
-    """
-    # Check if conversation exists
-    if not any(str(conv["id"]) == conversation_id for conv in FAKE_CONVERSATIONS):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conversation with ID {conversation_id} not found"
-        )
-    
-    # Filter messages for this conversation
-    conversation_messages = [m for m in FAKE_MESSAGES if str(m["conversation_id"]) == conversation_id]
-    
-    # Apply before filter if specified
-    if before:
-        conversation_messages = [m for m in conversation_messages if datetime.fromisoformat(m["created_at"].replace('Z', '+00:00')) < before]
-    
-    # Sort by created_at (oldest first for chat history)
-    conversation_messages.sort(key=lambda x: x["created_at"])
-    
-    # Apply pagination
-    start = min(skip, len(conversation_messages))
-    end = min(skip + limit, len(conversation_messages))
-    paginated_messages = conversation_messages[start:end]
-    
-    # Format messages for API response
-    formatted_messages = [format_message(msg) for msg in paginated_messages]
-    
-    return formatted_messages
-
-@router.post("/conversations/{conversation_id}/messages", response_model=Message, status_code=status.HTTP_201_CREATED)
-async def create_message(
-    conversation_id: str,
-    message: MessageCreate
-):
-    """
-    Create a new message in a conversation.
-    """
-    # Check if conversation exists
-    if not any(str(conv["id"]) == conversation_id for conv in FAKE_CONVERSATIONS):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conversation with ID {conversation_id} not found"
-        )
-    
-    # Create new message
-    new_id = str(uuid4())
-    now = datetime.now().isoformat()
-    
-    # In a real implementation, this would be saved to the database
-    new_message = {
-        "id": new_id,
-        "conversation_id": int(conversation_id),
-        "content": message.content,
-        "sender_id": int(message.sender.id),
-        "created_at": now,
-        "updated_at": now,
-        "status": "sent" if not message.scheduled_for else "draft",
-        "type": "text",
-        "template_id": None,
-        "entity_references": [
-            {
-                "type": entity.type,
-                "id": int(entity.id),
-                "name": entity.name
-            }
-            for entity in (message.referenced_entities or [])
-        ],
-        "attachments": [
-            {
-                "id": attachment.id,
-                "file_name": attachment.name,
-                "file_size": attachment.size,
-                "file_type": attachment.mime_type or "application/octet-stream",
-                "storage_path": f"attachments/{attachment.id}_{attachment.name}",
-                "uploaded_at": now
-            }
-            for attachment in (message.attachments or [])
-        ]
-    }
-    
-    # In a real implementation, we would update the conversation's last_message_at
-    # and potentially trigger notifications
-    
-    # Format for API response
-    return format_message(new_message)
-
-@router.post("/messages/bulk", response_model=List[Message], status_code=status.HTTP_201_CREATED)
-async def send_bulk_messages(
-    messages: List[MessageCreate]
-):
-    """
-    Send messages to multiple recipients in bulk.
-    """
-    # In a real implementation, this would create multiple messages
-    # For now, we'll just return a stub response
-    result = []
-    now = datetime.now()
-    
-    for i, msg in enumerate(messages):
-        new_id = str(uuid4())
-        conversation_id = f"temp_{i}"  # In a real implementation, this would be determined dynamically
-        
-        result.append(Message(
-            id=new_id,
+    try:
+        success = messaging_service.delete_conversation(
+            db,
             conversation_id=conversation_id,
-            content=msg.content,
-            sender=msg.sender,
-            recipients=msg.recipients,
-            attachments=msg.attachments,
-            referenced_entities=msg.referenced_entities,
-            status="sent" if not msg.scheduled_for else "draft",
-            created_at=now,
-            scheduled_for=msg.scheduled_for,
-            priority=msg.priority,
-            flags=[]
-        ))
-    
-    return result
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found or access denied"
+            )
+        return {"message": "Conversation deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting conversation: {str(e)}"
+        )
+
+# ============== MESSAGES ==============
+
+@router.get("/conversations/{conversation_id}/messages", response_model=MessageListResponse)
+async def get_conversation_messages(
+    conversation_id: UUID = Path(..., description="Conversation ID"),
+    message_type: Optional[MessageType] = Query(None, description="Filter by message type"),
+    sender_id: Optional[UUID] = Query(None, description="Filter by sender ID"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Get messages from a conversation.
+    Only participants can view conversation messages.
+    """
+    try:
+        # Check if user is participant
+        is_participant = messaging_service.is_conversation_participant(
+            db, conversation_id=conversation_id, user_id=current_user.id
+        )
+        
+        if not is_participant and current_user.role not in [UserRole.ADMIN, UserRole.SUPERADMIN]:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to conversation messages"
+            )
+        
+        # Build search filters
+        search_filters = MessageSearchFilters(
+            conversation_id=conversation_id,
+            message_type=message_type,
+            sender_id=sender_id,
+            query=filters.q,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            sort_by=filters.sort_by or "created_at",
+            sort_order=filters.sort_order
+        )
+        
+        messages, total = messaging_service.get_messages_with_search(
+            db, filters=search_filters
+        )
+        
+        return MessageListResponse(
+            messages=messages,
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving messages: {str(e)}"
+        )
+
+@router.post("/conversations/{conversation_id}/messages", response_model=Message)
+async def send_message(
+    message_data: SendMessageRequest,
+    conversation_id: UUID = Path(..., description="Conversation ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Send a message in a conversation.
+    Only participants can send messages.
+    """
+    try:
+        # Check if user is participant
+        is_participant = messaging_service.is_conversation_participant(
+            db, conversation_id=conversation_id, user_id=current_user.id
+        )
+        
+        if not is_participant:
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied to send messages in this conversation"
+            )
+        
+        message = messaging_service.send_message(
+            db,
+            conversation_id=conversation_id,
+            sender_id=current_user.id,
+            message_data=message_data
+        )
+        return message
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error sending message: {str(e)}"
+        )
 
 @router.put("/messages/{message_id}", response_model=Message)
 async def update_message(
-    message_id: str,
-    message_update: MessageUpdate
+    message_update: MessageUpdate,
+    message_id: UUID = Path(..., description="Message ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Update an existing message (status or flags).
+    Update a message.
+    Only message sender or admins can update messages.
     """
-    # Find the message in our fake data
-    for i, msg in enumerate(FAKE_MESSAGES):
-        if str(msg["id"]) == message_id:
-            # In a real implementation, we would update the database
-            # For now, we'll update our in-memory representation
-            if message_update.status:
-                FAKE_MESSAGES[i]["status"] = message_update.status
-                
-            # Update timestamp
-            FAKE_MESSAGES[i]["updated_at"] = datetime.now().isoformat()
-            
-            return format_message(FAKE_MESSAGES[i])
-    
-    # If not found, return 404
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Message with ID {message_id} not found"
-    )
+    try:
+        updated_message = messaging_service.update_message(
+            db,
+            message_id=message_id,
+            update_data=message_update,
+            updated_by=current_user.id
+        )
+        if not updated_message:
+            raise HTTPException(
+                status_code=404,
+                detail="Message not found or access denied"
+            )
+        return updated_message
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating message: {str(e)}"
+        )
 
-@router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/messages/{message_id}")
 async def delete_message(
-    message_id: str
+    message_id: UUID = Path(..., description="Message ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
     Delete a message.
+    Only message sender or admins can delete messages.
     """
-    # Check if the message exists
-    if not any(str(msg["id"]) == message_id for msg in FAKE_MESSAGES):
+    try:
+        success = messaging_service.delete_message(
+            db,
+            message_id=message_id,
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Message not found or access denied"
+            )
+        return {"message": "Message deleted successfully"}
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Message with ID {message_id} not found"
+            status_code=500,
+            detail=f"Error deleting message: {str(e)}"
+        )
+
+@router.post("/messages/{message_id}/read")
+async def mark_message_as_read(
+    message_id: UUID = Path(..., description="Message ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Mark a message as read.
+    Only message recipients can mark messages as read.
+    """
+    try:
+        success = messaging_service.mark_message_as_read(
+            db,
+            message_id=message_id,
+            reader_id=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Message not found or already read"
+            )
+        return {"message": "Message marked as read"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error marking message as read: {str(e)}"
+        )
+
+@router.post("/messages/{message_id}/react")
+async def add_message_reaction(
+    reaction_data: MessageReactionRequest,
+    message_id: UUID = Path(..., description="Message ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Add a reaction to a message.
+    Only conversation participants can react to messages.
+    """
+    try:
+        reaction = messaging_service.add_message_reaction(
+            db,
+            message_id=message_id,
+            user_id=current_user.id,
+            reaction_type=reaction_data.reaction_type
+        )
+        return reaction
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error adding message reaction: {str(e)}"
+        )
+
+# ============== MESSAGE ATTACHMENTS ==============
+
+@router.post("/messages/{message_id}/attachments", response_model=MessageAttachment)
+async def upload_message_attachment(
+    message_id: UUID = Path(..., description="Message ID"),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Upload an attachment to a message.
+    Only message sender can add attachments.
+    """
+    try:
+        attachment = messaging_service.upload_message_attachment(
+            db,
+            message_id=message_id,
+            file=file,
+            uploaded_by=current_user.id
+        )
+        return attachment
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error uploading attachment: {str(e)}"
+        )
+
+# ============== EMAIL TEMPLATES ==============
+
+@router.get("/templates", response_model=EmailTemplateListResponse)
+async def list_email_templates(
+    template_type: Optional[str] = Query(None, description="Filter by template type"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    filters: CommonFilters = Depends(get_common_filters),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    List email templates.
+    Consultants and admins can view email templates.
+    """
+    if current_user.role not in [UserRole.CONSULTANT, UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to view email templates"
         )
     
-    # In a real implementation, this would be a soft delete or hard delete
-    # For our mock implementation, we don't need to do anything
-    return None
+    try:
+        search_filters = EmailTemplateSearchFilters(
+            query=filters.q,
+            template_type=template_type,
+            is_active=is_active,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            sort_by=filters.sort_by or "name",
+            sort_order=filters.sort_order
+        )
+        
+        templates, total = messaging_service.get_email_templates_with_search(
+            db, filters=search_filters
+        )
+        
+        return EmailTemplateListResponse(
+            templates=templates,
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+            total_pages=(total + pagination.page_size - 1) // pagination.page_size
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving email templates: {str(e)}"
+        )
 
-@router.post("/messages/read", status_code=status.HTTP_204_NO_CONTENT)
-async def mark_messages_read(
-    request: MarkMessagesReadRequest
+@router.post("/templates", response_model=EmailTemplate)
+async def create_email_template(
+    template_data: EmailTemplateCreate,
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Mark multiple messages as read.
+    Create a new email template.
+    Only admins can create email templates.
     """
-    # In a real implementation, this would update the message status in the database
-    # For now, let's update our in-memory representation
-    for i, msg in enumerate(FAKE_MESSAGES):
-        if str(msg["id"]) in request.message_ids:
-            FAKE_MESSAGES[i]["status"] = "read"
+    try:
+        template = messaging_service.create_email_template(
+            db,
+            template_data=template_data,
+            created_by=current_user.id
+        )
+        return template
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating email template: {str(e)}"
+        )
+
+@router.put("/templates/{template_id}", response_model=EmailTemplate)
+async def update_email_template(
+    template_update: EmailTemplateUpdate,
+    template_id: UUID = Path(..., description="Template ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Update an email template.
+    Only admins can update email templates.
+    """
+    try:
+        updated_template = messaging_service.update_email_template(
+            db,
+            template_id=template_id,
+            update_data=template_update,
+            updated_by=current_user.id
+        )
+        if not updated_template:
+            raise HTTPException(
+                status_code=404,
+                detail="Email template not found"
+            )
+        return updated_template
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating email template: {str(e)}"
+        )
+
+@router.delete("/templates/{template_id}")
+async def delete_email_template(
+    template_id: UUID = Path(..., description="Template ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Delete an email template.
+    Only admins can delete email templates.
+    """
+    try:
+        success = messaging_service.delete_email_template(
+            db,
+            template_id=template_id,
+            deleted_by=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Email template not found"
+            )
+        return {"message": "Email template deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error deleting email template: {str(e)}"
+        )
+
+# ============== BULK MESSAGING ==============
+
+@router.post("/bulk-message")
+async def send_bulk_message(
+    recipient_ids: List[UUID] = Query(..., description="List of recipient user IDs"),
+    subject: str = Query(..., description="Message subject"),
+    content: str = Query(..., description="Message content"),
+    template_id: Optional[UUID] = Query(None, description="Email template ID to use"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
+):
+    """
+    Send bulk messages to multiple recipients.
+    Consultants and admins can send bulk messages.
+    """
+    if current_user.role not in [UserRole.CONSULTANT, UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to send bulk messages"
+        )
     
-    return None
-
-# Message Templates endpoints
-@router.get("/message-templates", response_model=List[MessageTemplate])
-async def get_message_templates(
-    category: Optional[str] = None
-):
-    """
-    Get message templates, optionally filtered by category.
-    """
-    # In a real implementation, this would query a database table
-    # For now, we'll define some fake templates
-    templates = [
-        {
-            "id": "1",
-            "name": "Interview Invitation",
-            "content": "Hello {candidate_name},\n\nWe are pleased to invite you for an interview for the {job_title} position at {company_name}. The interview is scheduled for {interview_date} at {interview_time}.\n\nPlease confirm your availability.\n\nRegards,\n{recruiter_name}",
-            "category": "interviews",
-            "variables": ["candidate_name", "job_title", "company_name", "interview_date", "interview_time", "recruiter_name"],
-            "created_at": "2024-01-15T10:00:00",
-            "updated_at": "2024-01-15T10:00:00"
-        },
-        {
-            "id": "2",
-            "name": "Job Offer",
-            "content": "Dear {candidate_name},\n\nWe are delighted to offer you the position of {job_title} at {company_name} with a starting salary of {salary}.\n\nYour start date would be {start_date}.\n\nPlease review the attached offer letter and respond with your acceptance by {response_deadline}.\n\nCongratulations,\n{recruiter_name}",
-            "category": "offers",
-            "variables": ["candidate_name", "job_title", "company_name", "salary", "start_date", "response_deadline", "recruiter_name"],
-            "created_at": "2024-01-15T11:00:00",
-            "updated_at": "2024-01-15T11:00:00"
-        },
-        {
-            "id": "3",
-            "name": "Application Acknowledgment",
-            "content": "Hello {candidate_name},\n\nThank you for applying for the {job_title} position at {company_name}. We've received your application and will review it shortly.\n\nBest regards,\n{recruiter_name}",
-            "category": "applications",
-            "variables": ["candidate_name", "job_title", "company_name", "recruiter_name"],
-            "created_at": "2024-01-16T09:00:00",
-            "updated_at": "2024-01-16T09:00:00"
-        },
-        {
-            "id": "4",
-            "name": "Rejection Letter",
-            "content": "Dear {candidate_name},\n\nThank you for your interest in the {job_title} position at {company_name} and for taking the time to go through our interview process.\n\nAfter careful consideration, we have decided to proceed with other candidates whose qualifications better match our current needs.\n\nWe appreciate your interest in {company_name} and wish you all the best in your job search.\n\nRegards,\n{recruiter_name}",
-            "category": "rejections",
-            "variables": ["candidate_name", "job_title", "company_name", "recruiter_name"],
-            "created_at": "2024-01-16T10:00:00",
-            "updated_at": "2024-01-16T10:00:00"
-        },
-        {
-            "id": "5",
-            "name": "Interview Reminder",
-            "content": "Hello {candidate_name},\n\nThis is a friendly reminder about your interview for the {job_title} position tomorrow, {interview_date} at {interview_time}.\n\nThe interview will be with {interviewer_name}, {interviewer_title}.\n\nLooking forward to meeting you,\n{recruiter_name}",
-            "category": "interviews",
-            "variables": ["candidate_name", "job_title", "interview_date", "interview_time", "interviewer_name", "interviewer_title", "recruiter_name"],
-            "created_at": "2024-01-17T09:00:00",
-            "updated_at": "2024-01-17T09:00:00"
+    try:
+        results = messaging_service.send_bulk_message(
+            db,
+            sender_id=current_user.id,
+            recipient_ids=recipient_ids,
+            subject=subject,
+            content=content,
+            template_id=template_id
+        )
+        
+        return {
+            "total_recipients": len(recipient_ids),
+            "successful_sends": len(results["successful"]),
+            "failed_sends": len(results["failed"]),
+            "results": results
         }
-    ]
-    
-    # Apply category filter if specified
-    if category:
-        templates = [t for t in templates if t["category"] == category]
-    
-    return templates
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error sending bulk message: {str(e)}"
+        )
 
-@router.post("/message-templates", response_model=MessageTemplate, status_code=status.HTTP_201_CREATED)
-async def create_message_template(
-    template: MessageTemplateCreate
+# ============== EMAIL TEMPLATE RENDERING ==============
+
+@router.post("/render-template/{template_id}")
+async def render_email_template(
+    context: Dict[str, Any],
+    template_id: UUID = Path(..., description="Email template ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Create a new message template.
+    Render an email template with provided context.
+    Consultants and admins can render email templates.
     """
-    # In a real implementation, this would insert into the database
-    new_id = str(uuid4())
-    now = datetime.now().isoformat()
+    if current_user.role not in [UserRole.CONSULTANT, UserRole.ADMIN, UserRole.SUPERADMIN]:
+        raise HTTPException(
+            status_code=403,
+            detail="Insufficient permissions to render email templates"
+        )
     
-    new_template = {
-        "id": new_id,
-        "name": template.name,
-        "content": template.content,
-        "category": template.category,
-        "variables": template.variables or [],
-        "created_at": now,
-        "updated_at": now
-    }
-    
-    # In a real implementation, we would save this to the database
-    
-    return new_template
+    try:
+        rendered_email = messaging_service.render_email_template(
+            db,
+            template_id=template_id,
+            context=context
+        )
+        return rendered_email
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error rendering email template: {str(e)}"
+        )
 
-@router.put("/message-templates/{template_id}", response_model=MessageTemplate)
-async def update_message_template(
-    template_id: str,
-    template_update: MessageTemplateUpdate
+@router.get("/unread-count")
+async def get_unread_message_count(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Update an existing message template.
+    Get unread message count for current user.
+    All authenticated users can check their unread count.
     """
-    # In a real implementation, we would find and update the template in the database
-    # For our mock implementation, we'll create a response with the updates
-    
-    # Start with a mock existing template
-    existing_template = {
-        "id": template_id,
-        "name": "Existing Template",
-        "content": "Old content",
-        "category": "old-category",
-        "variables": [],
-        "created_at": "2024-01-01T00:00:00",
-        "updated_at": "2024-01-01T00:00:00"
-    }
-    
-    # Apply updates
-    if template_update.name is not None:
-        existing_template["name"] = template_update.name
-    if template_update.content is not None:
-        existing_template["content"] = template_update.content
-    if template_update.category is not None:
-        existing_template["category"] = template_update.category
-    if template_update.variables is not None:
-        existing_template["variables"] = template_update.variables
-    
-    # Update timestamp
-    existing_template["updated_at"] = datetime.now().isoformat()
-    
-    return existing_template
+    try:
+        unread_count = messaging_service.get_unread_count(
+            db,
+            user_id=current_user.id
+        )
+        return unread_count
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving unread count: {str(e)}"
+        )
 
-@router.delete("/message-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_message_template(
-    template_id: str
+@router.post("/search")
+async def search_messages(
+    query: str = Query(..., description="Search query"),
+    conversation_id: Optional[UUID] = Query(None, description="Limit search to specific conversation"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum results to return"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Delete a message template.
+    Search messages accessible to current user.
+    All authenticated users can search their messages.
     """
-    # In a real implementation, this would delete from the database
-    # For our mock implementation, we don't need to do anything
-    return None
+    try:
+        messages = messaging_service.search_messages(
+            db,
+            user_id=current_user.id,
+            query=query,
+            conversation_id=conversation_id,
+            limit=limit
+        )
+        return {
+            "query": query,
+            "results": messages,
+            "total_found": len(messages)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error searching messages: {str(e)}"
+        )
 
-# Notification Preferences endpoints
-@router.get("/notification-preferences", response_model=NotificationPreferences)
-async def get_notification_preferences(
-    user_id: str
+@router.get("/conversation-summary")
+async def get_conversation_summary(
+    days: int = Query(7, ge=1, le=90, description="Number of days to analyze"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Get notification preferences for a user.
+    Get conversation activity summary for current user.
+    All authenticated users can view their conversation summary.
     """
-    # In a real implementation, this would query the database
-    # For now, return default preferences
-    return NotificationPreferences(
-        user_id=user_id,
-        in_app=True,
-        email=True,
-        email_digest="never",
-        sms=False,
-        do_not_disturb_start=None,
-        do_not_disturb_end=None
-    )
+    try:
+        summary = messaging_service.get_conversation_summary(
+            db,
+            user_id=current_user.id,
+            days=days
+        )
+        return summary
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving conversation summary: {str(e)}"
+        )
 
-@router.put("/notification-preferences", response_model=NotificationPreferences)
-async def update_notification_preferences(
-    user_id: str,
-    preferences: NotificationPreferencesUpdate
+@router.post("/conversations/{conversation_id}/archive")
+async def archive_conversation(
+    conversation_id: UUID = Path(..., description="Conversation ID"),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_database)
 ):
     """
-    Update notification preferences for a user.
+    Archive a conversation for current user.
+    Only conversation participants can archive conversations.
     """
-    # In a real implementation, this would update the database
-    # For now, we'll create a response with the updates
-    
-    # Start with default preferences
-    prefs = NotificationPreferences(
-        user_id=user_id,
-        in_app=True,
-        email=True,
-        email_digest="never",
-        sms=False,
-        do_not_disturb_start=None,
-        do_not_disturb_end=None
-    )
-    
-    # Apply updates
-    update_data = {k: v for k, v in preferences.dict().items() if v is not None}
-    for key, value in update_data.items():
-        setattr(prefs, key, value)
-    
-    return prefs
+    try:
+        success = messaging_service.archive_conversation(
+            db,
+            conversation_id=conversation_id,
+            user_id=current_user.id
+        )
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Conversation not found or access denied"
+            )
+        
+        return {"message": "Conversation archived successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error archiving conversation: {str(e)}"
+        )
 
-# Attachment handling
-@router.post("/attachments", response_model=AttachmentBase)
-async def upload_attachment():
+@router.get("/templates/analytics")
+async def get_email_template_analytics(
+    template_id: Optional[UUID] = Query(None, description="Filter by specific template ID"),
+    current_user: User = Depends(get_admin_user),
+    db: Session = Depends(get_database)
+):
     """
-    Upload an attachment for a message.
+    Get email template usage analytics.
+    Only admins can view template analytics.
     """
-    # In a real implementation, this would handle file upload and storage
-    # For our mock implementation, we'll just return a dummy response
-    new_id = str(uuid4())
-    
-    return AttachmentBase(
-        id=new_id,
-        type="file",
-        name="uploaded_file.pdf",
-        url=f"/api/v1/attachments/{new_id}",
-        size=123456,
-        mime_type="application/pdf"
-    )
+    try:
+        analytics = messaging_service.get_email_template_analytics(
+            db,
+            template_id=template_id
+        )
+        return analytics
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving template analytics: {str(e)}"
+        )
