@@ -1,131 +1,256 @@
 // src/services/api/jobs-service.ts
-import { Job } from '@/types';
-import { fetcher } from './http-client';
-import { PaginatedResponse } from './types';
+import apiClient from './axios-client';
+import { 
+  Job, 
+  JobCreateDTO, 
+  JobUpdateDTO, 
+  JobSearchParams, 
+  PaginatedJobsResponse,
+  JobSkillRequirement,
+  JobSkillRequirementCreateDTO,
+  JobSkillRequirementUpdateDTO,
+  JobApplicationStats
+} from '@/types/job';
 
-export const jobsService = {
-  getAll: async (officeId?: string, companyId?: string, status?: string, skill?: string, search?: string, page = 1, limit = 50) => {
+export const JobsService = {
+  /**
+   * Search for jobs with advanced filtering
+   */
+  search: async (params: JobSearchParams): Promise<PaginatedJobsResponse> => {
     try {
-      let endpoint = '/api/v1/jobs?';
-      
-      if (officeId) endpoint += `office_id=${officeId}&`;
-      if (companyId) endpoint += `company_id=${companyId}&`;
-      if (status) endpoint += `status=${status}&`;
-      if (skill) endpoint += `skill=${encodeURIComponent(skill)}&`;
-      if (search) endpoint += `search=${encodeURIComponent(search)}&`;
-      
-      endpoint += `skip=${(page - 1) * limit}&limit=${limit}`;
-      
-      const response = await fetcher<PaginatedResponse<Job>>(endpoint);
-      
-      // Ensure all date fields are properly converted to Date objects
-      const jobs = response.items.map(job => ({
-        ...job,
-        createdAt: job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt),
-        updatedAt: job.updatedAt instanceof Date ? job.updatedAt : new Date(job.updatedAt),
-        deadline: job.deadline ? (job.deadline instanceof Date ? job.deadline : new Date(job.deadline)) : undefined,
-        postedAt: job.postedAt ? (job.postedAt instanceof Date ? job.postedAt : new Date(job.postedAt)) : undefined,
-      }));
-      
-      return {
-        items: jobs,
-        totalCount: response.totalCount,
-        page: response.page,
-        pageSize: response.pageSize,
-        pageCount: response.pageCount
-      };
+      const response = await apiClient.get<PaginatedJobsResponse>('/jobs/search', { params });
+      return response;
+    } catch (error) {
+      console.error('Failed to search jobs:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get paginated list of jobs
+   */
+  getAll: async (params: Partial<JobSearchParams> = {}): Promise<PaginatedJobsResponse> => {
+    try {
+      const response = await apiClient.get<PaginatedJobsResponse>('/jobs', { params });
+      return response;
     } catch (error) {
       console.error('Failed to fetch jobs:', error);
       throw error;
     }
   },
-    
-  getById: async (id: string) => {
+
+  /**
+   * Get job by ID
+   */
+  getById: async (jobId: string): Promise<Job> => {
     try {
-      const job = await fetcher<Job>(`/api/v1/jobs/${id}`);
-      
-      return {
-        ...job,
-        createdAt: job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt),
-        updatedAt: job.updatedAt instanceof Date ? job.updatedAt : new Date(job.updatedAt),
-        deadline: job.deadline ? (job.deadline instanceof Date ? job.deadline : new Date(job.deadline)) : undefined,
-        postedAt: job.postedAt ? (job.postedAt instanceof Date ? job.postedAt : new Date(job.postedAt)) : undefined,
-      };
+      const response = await apiClient.get<Job>(`/jobs/${jobId}`);
+      return response;
     } catch (error) {
-      console.error('Failed to fetch job:', error);
+      console.error(`Failed to fetch job with ID ${jobId}:`, error);
       throw error;
     }
   },
-    
-  getByCompany: async (companyId: string) => {
+
+  /**
+   * Create a new job
+   */
+  create: async (jobData: JobCreateDTO): Promise<Job> => {
     try {
-      const jobs = await fetcher<Job[]>(`/api/v1/companies/${companyId}/jobs`);
-      
-      return jobs.map(job => ({
-        ...job,
-        createdAt: job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt),
-        updatedAt: job.updatedAt instanceof Date ? job.updatedAt : new Date(job.updatedAt),
-        deadline: job.deadline ? (job.deadline instanceof Date ? job.deadline : new Date(job.deadline)) : undefined,
-        postedAt: job.postedAt ? (job.postedAt instanceof Date ? job.postedAt : new Date(job.postedAt)) : undefined,
-      }));
-    } catch (error) {
-      console.error('Failed to fetch company jobs:', error);
-      throw error;
-    }
-  },
-    
-  create: async (job: Omit<Job, 'id' | 'createdAt' | 'updatedAt'>) => {
-    try {
-      const newJob = await fetcher<Job>('/api/v1/jobs/', {
-        method: 'POST',
-        body: JSON.stringify(job),
-      });
-      
-      return {
-        ...newJob,
-        createdAt: newJob.createdAt instanceof Date ? newJob.createdAt : new Date(newJob.createdAt),
-        updatedAt: newJob.updatedAt instanceof Date ? newJob.updatedAt : new Date(newJob.updatedAt),
-        deadline: newJob.deadline ? (newJob.deadline instanceof Date ? newJob.deadline : new Date(newJob.deadline)) : undefined,
-        postedAt: newJob.postedAt ? (newJob.postedAt instanceof Date ? newJob.postedAt : new Date(newJob.postedAt)) : undefined,
-      };
+      const response = await apiClient.post<Job>('/jobs', jobData);
+      return response;
     } catch (error) {
       console.error('Failed to create job:', error);
       throw error;
     }
   },
-    
-  update: async (id: string, updates: Partial<Job>) => {
+
+  /**
+   * Update an existing job
+   */
+  update: async (jobId: string, jobData: JobUpdateDTO): Promise<Job> => {
     try {
-      const updatedJob = await fetcher<Job>(`/api/v1/jobs/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      });
-      
-      return {
-        ...updatedJob,
-        createdAt: updatedJob.createdAt instanceof Date ? updatedJob.createdAt : new Date(updatedJob.createdAt),
-        updatedAt: updatedJob.updatedAt instanceof Date ? updatedJob.updatedAt : new Date(updatedJob.updatedAt),
-        deadline: updatedJob.deadline ? (updatedJob.deadline instanceof Date ? updatedJob.deadline : new Date(updatedJob.deadline)) : undefined,
-        postedAt: updatedJob.postedAt ? (updatedJob.postedAt instanceof Date ? updatedJob.postedAt : new Date(updatedJob.postedAt)) : undefined,
-      };
+      const response = await apiClient.put<Job>(`/jobs/${jobId}`, jobData);
+      return response;
     } catch (error) {
-      console.error('Failed to update job:', error);
+      console.error(`Failed to update job with ID ${jobId}:`, error);
       throw error;
     }
   },
-    
-  delete: async (id: string) => {
+
+  /**
+   * Delete a job
+   */
+  delete: async (jobId: string): Promise<boolean> => {
     try {
-      const result = await fetcher<{ success: boolean }>(`/api/v1/jobs/${id}`, {
-        method: 'DELETE',
-      });
-      
-      return result.success;
+      await apiClient.delete(`/jobs/${jobId}`);
+      return true;
     } catch (error) {
-      console.error('Failed to delete job:', error);
+      console.error(`Failed to delete job with ID ${jobId}:`, error);
       throw error;
     }
   },
+
+  /**
+   * Close a job posting
+   */
+  closeJob: async (jobId: string): Promise<Job> => {
+    try {
+      const response = await apiClient.post<Job>(`/jobs/${jobId}/close`);
+      return response;
+    } catch (error) {
+      console.error(`Failed to close job with ID ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Reopen a closed job posting
+   */
+  reopenJob: async (jobId: string): Promise<Job> => {
+    try {
+      const response = await apiClient.post<Job>(`/jobs/${jobId}/reopen`);
+      return response;
+    } catch (error) {
+      console.error(`Failed to reopen job with ID ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get applications for a specific job
+   */
+  getJobApplications: async (
+    jobId: string, 
+    page: number = 1, 
+    pageSize: number = 20
+  ): Promise<any> => { // Will refine type when implementing applications
+    try {
+      const response = await apiClient.get(`/jobs/${jobId}/applications`, {
+        params: { page, page_size: pageSize }
+      });
+      return response;
+    } catch (error) {
+      console.error(`Failed to fetch applications for job ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get job application statistics
+   */
+  getJobApplicationStats: async (jobId: string): Promise<JobApplicationStats> => {
+    try {
+      const response = await apiClient.get<JobApplicationStats>(`/jobs/${jobId}/applications/stats`);
+      return response;
+    } catch (error) {
+      console.error(`Failed to fetch application stats for job ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get skill requirements for a job
+   */
+  getJobSkillRequirements: async (jobId: string): Promise<JobSkillRequirement[]> => {
+    try {
+      const response = await apiClient.get<JobSkillRequirement[]>(`/jobs/${jobId}/skills`);
+      return response;
+    } catch (error) {
+      console.error(`Failed to fetch skill requirements for job ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Add a skill requirement to a job
+   */
+  addJobSkillRequirement: async (
+    jobId: string, 
+    skillRequirement: JobSkillRequirementCreateDTO
+  ): Promise<JobSkillRequirement> => {
+    try {
+      const response = await apiClient.post<JobSkillRequirement>(`/jobs/${jobId}/skills`, skillRequirement);
+      return response;
+    } catch (error) {
+      console.error(`Failed to add skill requirement to job ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Update a job skill requirement
+   */
+  updateJobSkillRequirement: async (
+    jobId: string,
+    skillRequirementId: string,
+    updates: JobSkillRequirementUpdateDTO
+  ): Promise<JobSkillRequirement> => {
+    try {
+      const response = await apiClient.put<JobSkillRequirement>(
+        `/jobs/${jobId}/skills/${skillRequirementId}`,
+        updates
+      );
+      return response;
+    } catch (error) {
+      console.error(`Failed to update skill requirement ${skillRequirementId} for job ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Remove a skill requirement from a job
+   */
+  removeJobSkillRequirement: async (
+    jobId: string,
+    skillRequirementId: string
+  ): Promise<boolean> => {
+    try {
+      await apiClient.delete(`/jobs/${jobId}/skills/${skillRequirementId}`);
+      return true;
+    } catch (error) {
+      console.error(`Failed to remove skill requirement ${skillRequirementId} from job ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get jobs similar to a specified job
+   */
+  getSimilarJobs: async (jobId: string, limit: number = 5): Promise<Job[]> => {
+    try {
+      const response = await apiClient.get<Job[]>(`/jobs/${jobId}/similar`, {
+        params: { limit }
+      });
+      return response;
+    } catch (error) {
+      console.error(`Failed to fetch similar jobs for job ${jobId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get jobs by company ID
+   */
+  getJobsByCompany: async (
+    companyId: string,
+    page: number = 1,
+    pageSize: number = 20
+  ): Promise<PaginatedJobsResponse> => {
+    try {
+      const response = await apiClient.get<PaginatedJobsResponse>('/jobs', {
+        params: {
+          company_id: companyId,
+          page,
+          page_size: pageSize
+        }
+      });
+      return response;
+    } catch (error) {
+      console.error(`Failed to fetch jobs for company ${companyId}:`, error);
+      throw error;
+    }
+  }
 };
 
-export default jobsService;
+export default JobsService;

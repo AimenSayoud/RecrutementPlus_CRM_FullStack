@@ -2,22 +2,33 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { subscribeWithSelector } from 'zustand/middleware';
+import AuthService, { 
+  User as ApiUser, 
+  AuthenticationError 
+} from '../services/api/auth-service';
 
-export type UserRole = 'super_admin' | 'admin' | 'employee';
-export type OfficeId = '1' | '2' | '3';
+export type UserRole = 'super_admin' | 'admin' | 'employee' | 'candidate' | 'consultant' | 'employer';
+export type OfficeId = string;
 
 interface User {
   id: string;
   name: string;
   email: string;
   role: UserRole;
-  officeId: OfficeId;
+  officeId?: string;
+}
+
+interface AuthError {
+  message: string;
+  code: string;
+  details?: Record<string, any>;
 }
 
 interface AuthState {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  error: AuthError | null;
 }
 
 interface AuthActions {
@@ -40,74 +51,108 @@ export const useAuthStore = create<AuthStore>()(
       user: null,
       isLoading: true,
       isAuthenticated: false,
+      error: null,
 
       // Actions
       login: async (email: string, password: string) => {
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         
         try {
-          const response = await fetch('http://localhost:8000/api/v1/auth/login', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ email, password }),
-          });
-
-          if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Login failed');
-          }
-
-          const data = await response.json();
-          const { user, tokens } = data;
-
+          const response = await AuthService.login({ email, password });
+          const { user, tokens } = response;
+          
           // Store tokens in localStorage
           localStorage.setItem('access_token', tokens.access_token);
           localStorage.setItem('refresh_token', tokens.refresh_token);
-
+          
+          // Store token expiry time for better handling
+          const expiresInMs = tokens.expires_in * 1000;
+          const expiryTime = Date.now() + expiresInMs;
+          localStorage.setItem('token_expiry', expiryTime.toString());
+          
           set({ 
             user: {
               id: user.id,
-              name: user.name,
+              name: `${user.first_name} ${user.last_name}`,
               email: user.email,
-              role: user.role,
+              role: user.role as UserRole,
               officeId: user.office_id,
             }, 
             isAuthenticated: true, 
             isLoading: false 
           });
         } catch (error) {
-          set({ isLoading: false });
-          console.error('Login error:', error);
-          throw error;
+          // Handle custom AuthenticationError
+          if (error instanceof AuthenticationError) {
+            set({
+              isLoading: false,
+              error: {
+                message: error.message,
+                code: error.code,
+                details: error.details
+              }
+            });
+            throw error; // Re-throw the error as is
+          } 
+          
+          // Handle other errors
+          let errorMessage = 'Login failed';
+          let errorCode = 'unknown_error';
+          
+          if (error instanceof Error) {
+            errorMessage = error.message;
+            
+            // Check for known error messages and convert them to appropriate error codes
+            if (errorMessage.includes('Incorrect email or password')) {
+              errorCode = 'invalid_credentials';
+            } else if (errorMessage.toLowerCase().includes('network')) {
+              errorCode = 'server_error';
+            }
+          } else if (typeof error === 'object' && error !== null) {
+            // Try to extract API error message if available
+            const errorObj = error as any;
+            if (errorObj.response?.data?.detail) {
+              errorMessage = errorObj.response.data.detail;
+            } else if (errorObj.response?.data?.message) {
+              errorMessage = errorObj.response.data.message;
+            }
+          }
+          
+          console.log('Creating AuthenticationError with:', errorMessage, errorCode);
+          
+          set({ 
+            isLoading: false, 
+            error: {
+              message: errorMessage,
+              code: errorCode
+            }
+          });
+          throw new AuthenticationError(errorMessage, errorCode);
         }
       },
 
       logout: async () => {
         try {
-          // Call logout endpoint
-          const token = localStorage.getItem('access_token');
-          if (token) {
-            await fetch('http://localhost:8000/api/v1/auth/logout', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-            });
-          }
+          await AuthService.logout();
         } catch (error) {
           console.error('Logout error:', error);
         } finally {
-          // Clear tokens and state regardless of API call success
+          // Clear all auth-related items from localStorage
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
+          localStorage.removeItem('token_expiry');
+          
+          // Clear state
           set({ 
             user: null, 
             isAuthenticated: false, 
-            isLoading: false 
+            isLoading: false,
+            error: null
           });
+          
+          // If we're in a browser environment, we could also clear auth cookies if using them
+          // This would require backend changes to use HttpOnly cookies
+          // document.cookie = 'refresh_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
         }
       },
 
@@ -139,16 +184,24 @@ export const useAuthStore = create<AuthStore>()(
         
         // Access levels hierarchy
         const roleHierarchy: Record<UserRole, number> = {
-          'super_admin': 3,
-          'admin': 2,
-          'employee': 1
+          'super_admin': 5,
+          'admin': 4,
+          'consultant': 3,
+          'employer': 2,
+          'employee': 1,
+          'candidate': 0
         };
+        
+        // If the user's role is not in the hierarchy, deny access
+        if (!(user.role in roleHierarchy) || !(requiredRole in roleHierarchy)) {
+          return false;
+        }
         
         return roleHierarchy[user.role] >= roleHierarchy[requiredRole];
       },
 
       initializeAuth: async () => {
-        set({ isLoading: true });
+        set({ isLoading: true, error: null });
         
         try {
           const token = localStorage.getItem('access_token');
@@ -157,45 +210,69 @@ export const useAuthStore = create<AuthStore>()(
             return;
           }
 
-          // Verify token with backend
-          const response = await fetch('http://localhost:8000/api/v1/auth/me', {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
-
-          if (response.ok) {
-            const user = await response.json();
-            set({ 
-              user: {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                officeId: user.office_id,
-              }, 
-              isAuthenticated: true, 
-              isLoading: false 
-            });
-          } else {
-            // Token is invalid, clear it
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('refresh_token');
-            set({ 
-              user: null, 
-              isAuthenticated: false, 
-              isLoading: false 
-            });
+          // Check if token is expired based on stored expiry time
+          const expiryTimeStr = localStorage.getItem('token_expiry');
+          if (expiryTimeStr) {
+            const expiryTime = parseInt(expiryTimeStr, 10);
+            // If token is expired or will expire in the next minute
+            if (Date.now() > expiryTime - 60000) {
+              // Try to refresh the token
+              const refreshToken = localStorage.getItem('refresh_token');
+              if (refreshToken) {
+                try {
+                  const refreshResponse = await AuthService.refreshToken({ refresh_token: refreshToken });
+                  
+                  // Update tokens in localStorage
+                  localStorage.setItem('access_token', refreshResponse.access_token);
+                  localStorage.setItem('refresh_token', refreshResponse.refresh_token);
+                  
+                  // Update expiry time
+                  const expiresInMs = refreshResponse.expires_in * 1000;
+                  const newExpiryTime = Date.now() + expiresInMs;
+                  localStorage.setItem('token_expiry', newExpiryTime.toString());
+                } catch (refreshError) {
+                  // If refresh fails, clear auth and return
+                  console.error('Token refresh failed:', refreshError);
+                  localStorage.removeItem('access_token');
+                  localStorage.removeItem('refresh_token');
+                  localStorage.removeItem('token_expiry');
+                  set({ 
+                    user: null, 
+                    isAuthenticated: false, 
+                    isLoading: false,
+                    error: null
+                  });
+                  return;
+                }
+              }
+            }
           }
+
+          // Verify token with backend by getting current user
+          const userData = await AuthService.getCurrentUser();
+          
+          set({ 
+            user: {
+              id: userData.id,
+              name: `${userData.first_name} ${userData.last_name}`,
+              email: userData.email,
+              role: userData.role as UserRole,
+              officeId: userData.office_id,
+            }, 
+            isAuthenticated: true, 
+            isLoading: false 
+          });
         } catch (error) {
           console.error('Auth initialization error:', error);
+          // Clear all auth data
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
+          localStorage.removeItem('token_expiry');
           set({ 
             user: null, 
             isAuthenticated: false, 
-            isLoading: false 
+            isLoading: false,
+            error: null
           });
         }
       },

@@ -1,8 +1,9 @@
 // src/services/api/index.ts
 import aiToolsService from './ai-tools-service';
+import { ApplicationsService } from './applications-service';
 import candidatesService from './candidates-service';
-import companiesService from './companies-service';
-import jobsService from './jobs-service';
+import { CompaniesService } from './companies-service';
+import { JobsService } from './jobs-service';
 import messagesService from './messages-service';
 import officesService from './offices-service';
 import skillsService from './skills-service';
@@ -14,9 +15,10 @@ import * as config from './config';
 // Main API service object
 export const api = {
   // Core services
+  applications: ApplicationsService,
   candidates: candidatesService,
-  companies: companiesService,
-  jobs: jobsService,
+  companies: CompaniesService,
+  jobs: JobsService,
   users: usersService,
   messages: messagesService,
   skills: skillsService,

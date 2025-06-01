@@ -223,5 +223,8 @@ export interface EmailTemplateInfo {
   placeholders: string[];
 }
 
-// Re-export messaging types
+// Re-export types from other modules
 export * from './messaging';
+export * from './job';
+export * from './company';
+export * from './application';

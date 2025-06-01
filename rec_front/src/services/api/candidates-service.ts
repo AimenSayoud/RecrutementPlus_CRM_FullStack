@@ -1,105 +1,139 @@
 // src/services/api/candidates-service.ts
-import { Candidate } from '@/types';
-import { fetcher } from './http-client';
-import { PaginatedResponse } from './types';
+import apiClient from './axios-client';
+import {
+  CandidateProfile,
+  CandidateFullProfile,
+  Education,
+  WorkExperience,
+  CandidateSkill,
+  CandidateJobPreference,
+  CandidateNotificationSettings,
+  CreateProfileRequest,
+  UpdateProfileRequest,
+  CreateEducationRequest,
+  UpdateEducationRequest,
+  CreateExperienceRequest,
+  UpdateExperienceRequest,
+  UpdateSkillsRequest,
+  UpdatePreferencesRequest,
+  UpdateNotificationSettingsRequest,
+  CandidateSearchFilters,
+  CandidateListResponse,
+  MatchingJobsResponse,
+  SkillRecommendationsResponse,
+  CareerProgression,
+  ApplicationAnalytics
+} from '../../types/candidate';
 
-export const candidatesService = {
-  getAll: async (officeId?: string, search?: string, skill?: string, status?: string, page = 1, limit = 50) => {
-    try {
-      let endpoint = '/candidates?';
-      
-      if (officeId) endpoint += `office_id=${officeId}&`;
-      if (search) endpoint += `search=${encodeURIComponent(search)}&`;
-      if (skill) endpoint += `skill=${encodeURIComponent(skill)}&`;
-      if (status) endpoint += `status=${status}&`;
-      
-      endpoint += `skip=${(page - 1) * limit}&limit=${limit}`;
-      
-      const response = await fetcher<PaginatedResponse<Candidate>>(endpoint);
-      
-      // Ensure all date fields are properly converted to Date objects
-      const candidates = response.items.map(candidate => ({
-        ...candidate,
-        createdAt: candidate.createdAt instanceof Date ? candidate.createdAt : new Date(candidate.createdAt),
-        updatedAt: candidate.updatedAt instanceof Date ? candidate.updatedAt : new Date(candidate.updatedAt),
-      }));
-      
-      return {
-        items: candidates,
-        totalCount: response.totalCount,
-        page: response.page,
-        pageSize: response.pageSize,
-        pageCount: response.pageCount
-      };
-    } catch (error) {
-      console.error('Failed to fetch candidates:', error);
-      throw error;
-    }
+// Service for candidate-related API endpoints
+export const CandidatesService = {
+  // Profile endpoints
+  async getMyProfile(): Promise<CandidateProfile> {
+    return await apiClient.get('/candidates/me');
   },
-    
-  getById: async (id: string) => {
-    try {
-      const candidate = await fetcher<Candidate>(`/candidates/${id}`);
-      
-      return {
-        ...candidate,
-        createdAt: candidate.createdAt instanceof Date ? candidate.createdAt : new Date(candidate.createdAt),
-        updatedAt: candidate.updatedAt instanceof Date ? candidate.updatedAt : new Date(candidate.updatedAt),
-      };
-    } catch (error) {
-      console.error('Failed to fetch candidate:', error);
-      throw error;
-    }
+
+  async createProfile(data: CreateProfileRequest): Promise<CandidateProfile> {
+    return await apiClient.post('/candidates/me', data);
   },
-    
-  create: async (candidate: Omit<Candidate, 'id' | 'createdAt' | 'updatedAt'>) => {
-    try {
-      const newCandidate = await fetcher<Candidate>('/candidates/', {
-        method: 'POST',
-        body: JSON.stringify(candidate),
-      });
-      
-      return {
-        ...newCandidate,
-        createdAt: newCandidate.createdAt instanceof Date ? newCandidate.createdAt : new Date(newCandidate.createdAt),
-        updatedAt: newCandidate.updatedAt instanceof Date ? newCandidate.updatedAt : new Date(newCandidate.updatedAt),
-      };
-    } catch (error) {
-      console.error('Failed to create candidate:', error);
-      throw error;
-    }
+
+  async updateProfile(data: UpdateProfileRequest): Promise<CandidateProfile> {
+    return await apiClient.put('/candidates/me', data);
   },
-    
-  update: async (id: string, updates: Partial<Candidate>) => {
-    try {
-      const updatedCandidate = await fetcher<Candidate>(`/candidates/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      });
-      
-      return {
-        ...updatedCandidate,
-        createdAt: updatedCandidate.createdAt instanceof Date ? updatedCandidate.createdAt : new Date(updatedCandidate.createdAt),
-        updatedAt: updatedCandidate.updatedAt instanceof Date ? updatedCandidate.updatedAt : new Date(updatedCandidate.updatedAt),
-      };
-    } catch (error) {
-      console.error('Failed to update candidate:', error);
-      throw error;
-    }
+
+  async getProfileCompletionPercentage(): Promise<{ completion_percentage: number }> {
+    return await apiClient.get('/candidates/me/completion-percentage');
   },
-    
-  delete: async (id: string) => {
-    try {
-      const result = await fetcher<{ success: boolean }>(`/candidates/${id}`, {
-        method: 'DELETE',
-      });
-      
-      return result.success;
-    } catch (error) {
-      console.error('Failed to delete candidate:', error);
-      throw error;
-    }
+
+  async completeProfile(data: any): Promise<CandidateProfile> {
+    return await apiClient.post('/candidates/me/complete-profile', data);
   },
+
+  // Education endpoints
+  async getMyEducation(): Promise<Education[]> {
+    return await apiClient.get('/candidates/me/education');
+  },
+
+  async addEducation(data: CreateEducationRequest): Promise<Education> {
+    return await apiClient.post('/candidates/me/education', data);
+  },
+
+  async updateEducation(id: string, data: UpdateEducationRequest): Promise<Education> {
+    return await apiClient.put(`/candidates/me/education/${id}`, data);
+  },
+
+  async deleteEducation(id: string): Promise<{ message: string }> {
+    return await apiClient.delete(`/candidates/me/education/${id}`);
+  },
+
+  // Work Experience endpoints
+  async getMyExperience(): Promise<WorkExperience[]> {
+    return await apiClient.get('/candidates/me/experience');
+  },
+
+  async addExperience(data: CreateExperienceRequest): Promise<WorkExperience> {
+    return await apiClient.post('/candidates/me/experience', data);
+  },
+
+  async updateExperience(id: string, data: UpdateExperienceRequest): Promise<WorkExperience> {
+    return await apiClient.put(`/candidates/me/experience/${id}`, data);
+  },
+
+  async deleteExperience(id: string): Promise<{ message: string }> {
+    return await apiClient.delete(`/candidates/me/experience/${id}`);
+  },
+
+  // Skills endpoints
+  async getMySkills(): Promise<CandidateSkill[]> {
+    return await apiClient.get('/candidates/me/skills');
+  },
+
+  async updateSkills(data: UpdateSkillsRequest): Promise<CandidateSkill[]> {
+    return await apiClient.put('/candidates/me/skills', data.skills);
+  },
+
+  // Job Preferences endpoints
+  async getMyPreferences(): Promise<CandidateJobPreference> {
+    return await apiClient.get('/candidates/me/preferences');
+  },
+
+  async updatePreferences(data: UpdatePreferencesRequest): Promise<CandidateJobPreference> {
+    return await apiClient.put('/candidates/me/preferences', data);
+  },
+
+  // Notification Settings endpoints
+  async getMyNotificationSettings(): Promise<CandidateNotificationSettings> {
+    return await apiClient.get('/candidates/me/notification-settings');
+  },
+
+  async updateNotificationSettings(data: UpdateNotificationSettingsRequest): Promise<CandidateNotificationSettings> {
+    return await apiClient.put('/candidates/me/notification-settings', data);
+  },
+
+  // Job Matching endpoints
+  async getMatchingJobs(limit: number = 10): Promise<MatchingJobsResponse> {
+    return await apiClient.get(`/candidates/me/matching-jobs?limit=${limit}`);
+  },
+
+  async getSkillRecommendations(limit: number = 10): Promise<SkillRecommendationsResponse> {
+    return await apiClient.get(`/candidates/me/skill-recommendations?limit=${limit}`);
+  },
+
+  async getCareerProgression(): Promise<CareerProgression> {
+    return await apiClient.get('/candidates/me/career-progression');
+  },
+
+  async getApplicationAnalytics(): Promise<ApplicationAnalytics> {
+    return await apiClient.get('/candidates/me/application-analytics');
+  },
+
+  // Search endpoints (for admin/consultant users)
+  async searchCandidates(filters: CandidateSearchFilters): Promise<CandidateListResponse> {
+    return await apiClient.post('/candidates/search', filters);
+  },
+
+  async getCandidateById(id: string): Promise<CandidateFullProfile> {
+    return await apiClient.get(`/candidates/${id}`);
+  }
 };
 
-export default candidatesService;
+export default CandidatesService;

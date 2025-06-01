@@ -2,7 +2,7 @@
 
 // import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 // import { useDataStore } from '@/store/useDataStore';
-// import { useAuth } from './AuthContext';
+// import { useAuthStore, selectUser } from '@/store/useAuthStore';
 // import {
 //   CreateMessageDto,
 //   CreateConversationDto,
@@ -91,7 +91,7 @@
 //     setIsMobileView
 //   } = useDataStore();
 
-//   const { user } = useAuth();
+//   const user = useAuthStore(selectUser);
   
 //   // Local state mirrors
 //   const [conversations, setConversations] = useState<UIConversation[]>([]);

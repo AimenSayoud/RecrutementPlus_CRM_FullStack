@@ -5,7 +5,7 @@ import { useTheme } from '@/app/context/ThemeContext';
 import Button from '@/components/ui/Button';
 
 type WithRoleAccessProps = {
-  requiredRole: 'super_admin' | 'admin' | 'employee';
+  requiredRole: 'super_admin' | 'admin' | 'employee' | 'candidate' | 'consultant' | 'employer';
 };
 
 export function withRoleAccess<P extends object>(

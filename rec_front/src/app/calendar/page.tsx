@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTheme } from '@/app/context/ThemeContext';
-//import { useAuth } from '@/app/context/AuthContext';
+import { useAuthStore, selectUser } from '@/store/useAuthStore';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 // import { api } from '@/lib/api';
@@ -33,7 +33,7 @@ type ViewMode = 'month' | 'week' | 'day';
 
 const CalendarPage = () => {
   const { colors } = useTheme();
-  //const { user } = useAuth();
+  const user = useAuthStore(selectUser);
   const [viewMode, setViewMode] = useState<ViewMode>('month');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
