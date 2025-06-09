@@ -30,6 +30,7 @@ async def list_companies(
     company_size: Optional[str] = Query(None, description="Filter by company size"),
     location: Optional[str] = Query(None, description="Filter by location"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    office_id: Optional[UUID] = Query(None, description="Filter by office ID", alias="officeId"),
     
     # Pagination and common filters
     pagination: PaginationParams = Depends(get_pagination_params),
@@ -48,6 +49,7 @@ async def list_companies(
         search_filters = CompanySearchFilters(
             name=name or filters.q,
             industry=industry,
+            office_id=office_id,
             company_size=company_size,
             location=location,
             is_active=is_active,

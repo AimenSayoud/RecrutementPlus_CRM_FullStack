@@ -1,11 +1,12 @@
 # app/api/v1/endpoints/candidates.py
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app.api.v1 import deps
 from app.models.enums import UserRole
+from app.models.user import User  # Import User model to use in the endpoint
 from app.schemas.candidate import (
     CandidateProfile, CandidateProfileCreate, CandidateProfileUpdate,
     CandidateFullProfile, Education, EducationCreate, EducationUpdate,
@@ -805,6 +806,130 @@ def get_application_analytics(
     return analytics
 
 
+# Get all candidates (for consultants/admins)
+@router.get("", response_model=CandidateListResponse)
+def get_all_candidates(
+    *,
+    db: Session = Depends(deps.get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+    office_id: Optional[UUID] = Query(None, alias="officeId"),
+    current_user: deps.CurrentUser = Depends(deps.get_current_consultant_or_admin)
+) -> Any:
+    """
+    Get all candidates with pagination (Consultant/Admin only)
+    """
+    # Use simplified filters to get all candidates with pagination
+    filters = CandidateSearchFilters(
+        page=skip // limit + 1 if limit > 0 else 1,
+        page_size=limit,
+        sort_by="updated_at",
+        sort_order="desc"
+    )
+    
+    try:
+        print("Getting candidates with search filters...")
+        candidates, total = candidate_service.crud.get_multi_with_search(
+            db,
+            filters=filters
+        )
+        
+        print(f"Got {len(candidates)} candidates from search, total={total}")
+        
+        # Safely map candidates to full profiles with error handling
+        candidate_profiles = []
+        for candidate in candidates:
+            try:
+                print(f"Processing candidate: {candidate.id}")
+                # Ensure user is attached to candidate
+                if not hasattr(candidate, 'user') or not candidate.user:
+                    user = db.query(User).filter(User.id == candidate.user_id).first()
+                    if user:
+                        print(f"  - Loaded user: {user.email}")
+                        candidate.user = user
+                    else:
+                        print(f"  - Cannot convert candidate {candidate.id} - user not found")
+                        continue
+                else:
+                    print(f"  - User already attached: {candidate.user.email}")
+                
+                # Create a CandidateProfile model for pydantic
+                profile_dict = {
+                    "id": candidate.id,
+                    "user_id": candidate.user_id,
+                    "current_position": candidate.current_position,
+                    "current_company": candidate.current_company,
+                    "summary": candidate.summary,
+                    "years_of_experience": candidate.years_of_experience,
+                    "nationality": candidate.nationality,
+                    "location": candidate.location,
+                    "city": candidate.city,
+                    "country": candidate.country,
+                    "address": candidate.address,
+                    "postal_code": candidate.postal_code,
+                    "profile_completed": candidate.profile_completed,
+                    "profile_visibility": candidate.profile_visibility or "public",
+                    "is_open_to_opportunities": candidate.is_open_to_opportunities or True,
+                    "cv_urls": candidate.cv_urls or [],
+                    "cover_letter_url": candidate.cover_letter_url,
+                    "linkedin_url": candidate.linkedin_url,
+                    "github_url": candidate.github_url,
+                    "portfolio_url": candidate.portfolio_url,
+                    "willing_to_relocate": candidate.willing_to_relocate or False,
+                    "salary_expectation": candidate.salary_expectation,
+                    "created_at": candidate.created_at,
+                    "updated_at": candidate.updated_at
+                }
+                
+                # Create a full profile directly with dictionary to avoid pydantic validation issues
+                profile = CandidateFullProfile(
+                    id=candidate.user.id,
+                    email=candidate.user.email,
+                    first_name=candidate.user.first_name,
+                    last_name=candidate.user.last_name,
+                    phone=getattr(candidate.user, 'phone', None),
+                    is_active=candidate.user.is_active,
+                    is_verified=candidate.user.is_verified,
+                    created_at=candidate.user.created_at,
+                    updated_at=candidate.user.updated_at,
+                    profile=profile_dict
+                )
+                candidate_profiles.append(profile)
+                print(f"  - Successfully created CandidateFullProfile")
+            except Exception as e:
+                print(f"Error converting candidate {candidate.id} to FullProfile: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continue with next candidate rather than failing completely
+        
+        print(f"Successfully mapped {len(candidate_profiles)} candidates to profiles")
+        
+        # Create a model that pydantic can work with
+        response = {
+            "candidates": [profile.dict() for profile in candidate_profiles],
+            "total": total,
+            "page": filters.page,
+            "page_size": filters.page_size,
+            "total_pages": (total + filters.page_size - 1) // filters.page_size if total > 0 else 1
+        }
+        
+        # Log response structure
+        print(f"Response structure: candidates={len(response['candidates'])}, total={response['total']}")
+        
+        return response
+    except Exception as e:
+        print(f"Error in get_all_candidates: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return empty response rather than failing
+        return CandidateListResponse(
+            candidates=[],
+            total=0,
+            page=filters.page,
+            page_size=filters.page_size,
+            total_pages=1
+        )
+
 # Search candidates (for consultants/admins)
 @router.post("/search", response_model=CandidateListResponse)
 def search_candidates(
@@ -816,18 +941,108 @@ def search_candidates(
     """
     Search candidates with filters (Consultant/Admin only)
     """
-    candidates, total = candidate_service.crud.get_multi_with_search(
-        db,
-        filters=filters
-    )
-    
-    return CandidateListResponse(
-        candidates=[CandidateFullProfile.from_orm(c) for c in candidates],
-        total=total,
-        page=filters.page,
-        page_size=filters.page_size,
-        total_pages=(total + filters.page_size - 1) // filters.page_size
-    )
+    try:
+        print("Getting candidates with search filters...")
+        candidates, total = candidate_service.crud.get_multi_with_search(
+            db,
+            filters=filters
+        )
+        
+        print(f"Got {len(candidates)} candidates from search, total={total}")
+        
+        # Safely map candidates to full profiles with error handling
+        candidate_profiles = []
+        for candidate in candidates:
+            try:
+                print(f"Processing candidate: {candidate.id}")
+                # Ensure user is attached to candidate
+                if not hasattr(candidate, 'user') or not candidate.user:
+                    user = db.query(User).filter(User.id == candidate.user_id).first()
+                    if user:
+                        print(f"  - Loaded user: {user.email}")
+                        candidate.user = user
+                    else:
+                        print(f"  - Cannot convert candidate {candidate.id} - user not found")
+                        continue
+                else:
+                    print(f"  - User already attached: {candidate.user.email}")
+                
+                # Create a CandidateProfile model for pydantic
+                profile_dict = {
+                    "id": candidate.id,
+                    "user_id": candidate.user_id,
+                    "current_position": candidate.current_position,
+                    "current_company": candidate.current_company,
+                    "summary": candidate.summary,
+                    "years_of_experience": candidate.years_of_experience,
+                    "nationality": candidate.nationality,
+                    "location": candidate.location,
+                    "city": candidate.city,
+                    "country": candidate.country,
+                    "address": candidate.address,
+                    "postal_code": candidate.postal_code,
+                    "profile_completed": candidate.profile_completed,
+                    "profile_visibility": candidate.profile_visibility or "public",
+                    "is_open_to_opportunities": candidate.is_open_to_opportunities or True,
+                    "cv_urls": candidate.cv_urls or [],
+                    "cover_letter_url": candidate.cover_letter_url,
+                    "linkedin_url": candidate.linkedin_url,
+                    "github_url": candidate.github_url,
+                    "portfolio_url": candidate.portfolio_url,
+                    "willing_to_relocate": candidate.willing_to_relocate or False,
+                    "salary_expectation": candidate.salary_expectation,
+                    "created_at": candidate.created_at,
+                    "updated_at": candidate.updated_at
+                }
+                
+                # Create a full profile directly with dictionary to avoid pydantic validation issues
+                profile = CandidateFullProfile(
+                    id=candidate.user.id,
+                    email=candidate.user.email,
+                    first_name=candidate.user.first_name,
+                    last_name=candidate.user.last_name,
+                    phone=getattr(candidate.user, 'phone', None),
+                    is_active=candidate.user.is_active,
+                    is_verified=candidate.user.is_verified,
+                    created_at=candidate.user.created_at,
+                    updated_at=candidate.user.updated_at,
+                    profile=profile_dict
+                )
+                candidate_profiles.append(profile)
+                print(f"  - Successfully created CandidateFullProfile")
+            except Exception as e:
+                print(f"Error converting candidate {candidate.id} to FullProfile: {e}")
+                import traceback
+                traceback.print_exc()
+                # Continue with next candidate rather than failing completely
+        
+        print(f"Successfully mapped {len(candidate_profiles)} candidates to profiles")
+        
+        # Create a model that pydantic can work with
+        response = {
+            "candidates": [profile.dict() for profile in candidate_profiles],
+            "total": total,
+            "page": filters.page,
+            "page_size": filters.page_size,
+            "total_pages": (total + filters.page_size - 1) // filters.page_size if total > 0 else 1
+        }
+        
+        # Log response structure
+        print(f"Response structure: candidates={len(response['candidates'])}, total={response['total']}")
+        
+        return response
+    except Exception as e:
+        print(f"Error in search_candidates: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return empty response rather than failing
+        return CandidateListResponse(
+            candidates=[],
+            total=0,
+            page=filters.page,
+            page_size=filters.page_size,
+            total_pages=1
+        )
 
 
 @router.get("/{candidate_id}", response_model=CandidateFullProfile)

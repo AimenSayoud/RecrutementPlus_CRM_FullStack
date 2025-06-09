@@ -9,11 +9,11 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Set up CORS
+# For development, use a simple CORS configuration that works with all origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For development
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,  # Must be False when using wildcard origins
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -43,3 +43,4 @@ async def health_check():
         "version": "0.1.0",
         "environment": "development"
     }
+

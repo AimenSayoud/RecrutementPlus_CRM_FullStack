@@ -127,16 +127,33 @@ export const useDataStore = create<DataState>((set, get) => ({
       // Use the API client to fetch candidates from backend
       const response = await api.candidates.getAll(officeId);
       
-      // Extract candidates from the paginated response
-      const candidates = response.items;
+      // Safely extract candidates from the paginated response
+      const candidates = response?.candidates || [];
+      
+      if (!Array.isArray(candidates)) {
+        console.warn('Expected array of candidates but got:', typeof candidates);
+        throw new Error('Invalid response format from API');
+      }
+      
+      console.log('Raw candidates response:', response);
       
       // Convert candidates to DisplayParticipants for entity selection
-      const candidatesAsDisplayParticipants = candidates.map(candidate => ({
-        id: candidate.id,
-        type: 'candidate',
-        name: `${candidate.firstName} ${candidate.lastName}`,
-        avatar: null
-      }));
+      const candidatesAsDisplayParticipants = candidates.map(candidate => {
+        // Add safety checks to avoid null reference errors
+        if (!candidate || typeof candidate !== 'object') {
+          console.warn('Invalid candidate object:', candidate);
+          return null;
+        }
+        
+        return {
+          id: candidate.id || 'unknown-id',
+          type: 'candidate',
+          name: candidate.firstName && candidate.lastName 
+            ? `${candidate.firstName} ${candidate.lastName}`
+            : 'Unknown Candidate',
+          avatar: null
+        };
+      }).filter(Boolean); // Remove any null values
       
       console.log('Fetched candidates from API:', candidates.length);
       set({ 
@@ -150,10 +167,11 @@ export const useDataStore = create<DataState>((set, get) => ({
       // Log the error but don't use mock data
       console.warn('Failed to fetch candidates from API');
       
+      // Always set empty arrays on error to avoid null reference errors elsewhere
       set({ 
         isLoadingCandidates: false, 
         candidatesError: error instanceof Error ? error.message : 'Failed to fetch candidates',
-        // Set an empty array to prevent further fetch attempts
+        candidates: [], 
         candidatesAsDisplayParticipants: []
       });
     }
@@ -170,16 +188,31 @@ export const useDataStore = create<DataState>((set, get) => ({
       // Use the API client to fetch companies from backend
       const response = await api.companies.getAll(officeId);
       
-      // Extract companies from the paginated response
-      const companies = response.items;
+      // Safely extract companies from the paginated response
+      const companies = response?.companies || [];
+      
+      if (!Array.isArray(companies)) {
+        console.warn('Expected array of companies but got:', typeof companies);
+        throw new Error('Invalid response format from API');
+      }
+      
+      console.log('Raw companies response:', response);
       
       // Convert companies to DisplayParticipants for entity selection
-      const companiesAsDisplayParticipants = companies.map(company => ({
-        id: company.id,
-        type: 'employer',
-        name: company.name,
-        avatar: null
-      }));
+      const companiesAsDisplayParticipants = companies.map(company => {
+        // Add safety checks to avoid null reference errors
+        if (!company || typeof company !== 'object') {
+          console.warn('Invalid company object:', company);
+          return null;
+        }
+        
+        return {
+          id: company.id || 'unknown-id',
+          type: 'employer',
+          name: company.name || 'Unknown Company',
+          avatar: null
+        };
+      }).filter(Boolean); // Remove any null values
       
       console.log('Fetched companies from API:', companies.length);
       set({ 
@@ -193,10 +226,11 @@ export const useDataStore = create<DataState>((set, get) => ({
       // Log the error but don't use mock data
       console.warn('Failed to fetch companies from API');
       
+      // Always set empty arrays on error to avoid null reference errors elsewhere
       set({ 
         isLoadingCompanies: false, 
         companiesError: error instanceof Error ? error.message : 'Failed to fetch companies',
-        // Set an empty array to prevent further fetch attempts
+        companies: [], 
         companiesAsDisplayParticipants: []
       });
     }
@@ -213,16 +247,31 @@ export const useDataStore = create<DataState>((set, get) => ({
       // Get the combined roles parameter
       const response = await api.users.getAll(officeId, roles.join(','));
       
-      // Extract users from the paginated response
-      const users = response.items;
+      // Extract users from the paginated response with safety checks
+      const users = response?.users || [];
       
-      // Convert users to DisplayParticipants for entity selection
-      const usersAsDisplayParticipants = users.map(user => ({
-        id: user.id,
-        type: user.role === 'super_admin' || user.role === 'admin' ? 'admin' : 'consultant',
-        name: user.name,
-        avatar: null
-      }));
+      if (!Array.isArray(users)) {
+        console.warn('Expected array of users but got:', typeof users);
+        throw new Error('Invalid response format from API');
+      }
+      
+      console.log('Raw users response:', response);
+      
+      // Convert users to DisplayParticipants for entity selection with safety checks
+      const usersAsDisplayParticipants = users.map(user => {
+        // Add safety checks to avoid null reference errors
+        if (!user || typeof user !== 'object') {
+          console.warn('Invalid user object:', user);
+          return null;
+        }
+        
+        return {
+          id: user.id || 'unknown-id',
+          type: user.role === 'super_admin' || user.role === 'admin' ? 'admin' : 'consultant',
+          name: user.name || 'Unknown User',
+          avatar: null
+        };
+      }).filter(Boolean); // Remove any null values
       
       console.log('Fetched users from API:', users.length);
       set({ 
@@ -235,10 +284,10 @@ export const useDataStore = create<DataState>((set, get) => ({
       // Log the error but don't use mock data
       console.warn('Failed to fetch users from API');
       
+      // Always set empty arrays on error to avoid null reference errors elsewhere
       set({ 
         isLoadingUsers: false, 
         usersError: error instanceof Error ? error.message : 'Failed to fetch users',
-        // Set an empty array to prevent further fetch attempts
         usersAsDisplayParticipants: []
       });
     }
@@ -249,12 +298,20 @@ export const useDataStore = create<DataState>((set, get) => ({
     set({ isLoadingEmailTemplates: true, emailTemplatesError: null });
     try {
       const templates = await api.getEmailTemplates();
+      
+      // Add safety check for templates
+      if (!Array.isArray(templates)) {
+        console.warn('Expected array of email templates but got:', typeof templates);
+        throw new Error('Invalid response format from API');
+      }
+      
       set({ emailTemplates: templates, isLoadingEmailTemplates: false });
     } catch (error) {
       console.error('Error fetching email templates:', error);
       set({ 
         isLoadingEmailTemplates: false, 
-        emailTemplatesError: error instanceof Error ? error.message : 'Failed to fetch email templates' 
+        emailTemplatesError: error instanceof Error ? error.message : 'Failed to fetch email templates',
+        emailTemplates: [] // Set empty array on error
       });
     }
   },

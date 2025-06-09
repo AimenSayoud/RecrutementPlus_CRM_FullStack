@@ -79,6 +79,10 @@ class CRUDCompany(CRUDBase[Company, CompanyCreate, CompanyUpdate]):
         
         if filters.founded_before:
             query = query.filter(Company.founded_year <= filters.founded_before)
+            
+        if filters.office_id:
+            # If this filter exists, filter by office ID
+            query = query.filter(Company.office_id == filters.office_id)
         
         # Count total before pagination
         total = query.count()

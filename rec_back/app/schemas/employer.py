@@ -229,6 +229,7 @@ class CompanySearchFilters(BaseModel):
     is_premium: Optional[bool] = Field(None, description="Premium companies only")
     founded_after: Optional[int] = Field(None, description="Founded after year")
     founded_before: Optional[int] = Field(None, description="Founded before year")
+    office_id: Optional[UUID] = Field(None, description="Filter by office ID")
     
     # Pagination
     page: int = Field(1, ge=1)

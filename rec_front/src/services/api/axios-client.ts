@@ -80,6 +80,34 @@ apiClient.interceptors.response.use(
       );
       errorObj.name = 'NetworkConnectionError';
       
+      // Return an empty successful response with a flag indicating network error
+      // This allows the app to continue functioning with empty data
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('Development mode: Returning empty data instead of failing');
+        // Return a response structure that matches our backend formats
+        // with empty arrays for all possible field names used by API responses
+        return Promise.resolve({ 
+          data: { 
+            // Standard paginated response fields based on resource type
+            companies: [],
+            candidates: [],
+            users: [],
+            jobs: [],
+            applications: [],
+            skills: [],
+            
+            // Common pagination metadata
+            total: 0,
+            page: 1,
+            page_size: 10,
+            total_pages: 0,
+            
+            // Flag for UI to handle network errors gracefully
+            _network_error: true 
+          } 
+        });
+      }
+      
       return Promise.reject(errorObj);
     }
     

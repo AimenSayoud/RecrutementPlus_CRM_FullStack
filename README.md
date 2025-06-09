@@ -219,3 +219,12 @@ Key environment variables to configure:
 - Update default credentials in environment variables
 - Implement TLS for secure communication
 - Review the ingress configuration for production use
+
+
+
+
+
+
+
+
+vps password: 1#Heho1(e;fItB-Bq3je

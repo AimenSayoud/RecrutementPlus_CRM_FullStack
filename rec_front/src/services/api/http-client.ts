@@ -71,3 +71,4 @@ export const extractPaginatedItems = <T>(response: {
 }): T[] => {
   return response.items;
 };
+

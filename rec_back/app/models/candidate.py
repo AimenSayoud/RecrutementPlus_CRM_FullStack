@@ -15,7 +15,8 @@ class CandidateProfile(BaseModel):
     current_company = Column(String(200), nullable=True)
     summary = Column(Text, nullable=True)
     years_of_experience = Column(Integer, nullable=True, default=0)
-    date_of_birth = Column(Date, nullable=True)
+    # NOTE: date_of_birth is commented out because it doesn't exist in the database
+    # date_of_birth = Column(Date, nullable=True)
     nationality = Column(String(100), nullable=True)
     
     # Location

@@ -24,9 +24,19 @@ import {
   CareerProgression,
   ApplicationAnalytics
 } from '../../types/candidate';
+import { Candidate } from '../../types';
+import { adaptCandidateFromApi, adaptCandidateListFromApi } from './adapters/candidate-adapter';
 
 // Service for candidate-related API endpoints
 export const CandidatesService = {
+  // Get all candidates (for admin/consultant users)
+  async getAll(officeId?: string): Promise<{candidates: Candidate[], total: number, page: number, pageSize: number, totalPages: number}> {
+    const queryParams = officeId ? `?officeId=${officeId}` : '';
+    const response = await apiClient.get(`/candidates${queryParams}`);
+    console.log('Raw API response:', response);
+    return adaptCandidateListFromApi(response);
+  },
+
   // Profile endpoints
   async getMyProfile(): Promise<CandidateProfile> {
     return await apiClient.get('/candidates/me');
@@ -127,8 +137,9 @@ export const CandidatesService = {
   },
 
   // Search endpoints (for admin/consultant users)
-  async searchCandidates(filters: CandidateSearchFilters): Promise<CandidateListResponse> {
-    return await apiClient.post('/candidates/search', filters);
+  async searchCandidates(filters: CandidateSearchFilters): Promise<{candidates: Candidate[], total: number, page: number, pageSize: number, totalPages: number}> {
+    const response = await apiClient.post('/candidates/search', filters);
+    return adaptCandidateListFromApi(response);
   },
 
   async getCandidateById(id: string): Promise<CandidateFullProfile> {
