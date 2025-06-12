@@ -8,6 +8,8 @@ export { applicationApi } from './application.api';
 export { companyApi } from './company.api';
 export { skillApi } from './skill.api';
 export { aiToolsApi } from './ai-tools.api';
+export { messagingApi } from './messaging.api';
+
 
 // Re-export config utilities
 export { apiClient, tokenManager, handleApiError, apiRequest } from './config';

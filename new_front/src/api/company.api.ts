@@ -8,7 +8,7 @@ import {
   CompanyUpdate,
   CompanySearchFilters,
   CompanyListResponse,
-} from '@/types/job.types';
+} from '@/types/company.types';
 
 export const companyApi = {
   // List and search

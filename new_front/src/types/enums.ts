@@ -94,10 +94,3 @@ export enum ConversationType {
   SYSTEM = 'system'
 }
 
-export enum UserRole {
-  CANDIDATE = 'candidate',
-  EMPLOYER = 'employer',
-  CONSULTANT = 'consultant',
-  ADMIN = 'admin',
-  SUPERADMIN = 'superadmin'
-}

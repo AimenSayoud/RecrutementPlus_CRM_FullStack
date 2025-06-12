@@ -8,7 +8,7 @@ import {
   SkillUpdate,
   SkillSearchFilters,
   SkillListResponse,
-} from '@/types/application.types';
+} from '@/types/skill.types';
 
 export const skillApi = {
   // Skills
