@@ -11,5 +11,4 @@ export * from './messaging.types';
 export * from './ai-tools.types';
 export * from './company.types';
 export * from './skill.types';
-export * from './notification.types';
 
